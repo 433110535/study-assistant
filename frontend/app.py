@@ -477,7 +477,7 @@ def render_sidebar():
                 "2. 填入 `DASHSCOPE_API_KEY`  \n3. 重启应用  \n\n"
                 "[获取 API Key](https://dashscope.console.aliyun.com/)"
             )
-            st.stop()
+            # 缺 Key 时模型功能不可用，但整卷离线判分不依赖模型，页面要继续渲染。
 
         st.markdown(
             '<div class="rail-label"><span>Workspace</span><span>11 modules</span></div>',

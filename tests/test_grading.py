@@ -311,13 +311,19 @@ class TestQuizPaperPage(unittest.TestCase):
 
     def _quiz(self):
         from streamlit.testing.v1 import AppTest
+        from unittest import mock
 
         app = str(PROJECT_ROOT / "frontend" / "app.py")
         at = AppTest.from_file(app, default_timeout=120)
         at.session_state["authenticated"] = True
         at.session_state["auth_user"] = "student"
         at.session_state["current_page"] = "quiz"
-        at.run()
+        # CI 没有 .env。校验失败时页面仍要画出整卷输入，不能停在侧边栏。
+        with mock.patch(
+            "backend.config.validate_config",
+            side_effect=ValueError("未找到 DASHSCOPE_API_KEY"),
+        ):
+            at.run()
         return at
 
     def test_pasted_paper_shows_each_item(self):

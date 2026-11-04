@@ -753,27 +753,31 @@ _register_all_tools()
 
 def execute_tool(agent, tool_name: str, tool_args: Dict[str, Any]) -> str:
     """
-    执行指定工具（带超时，结果写入 trace 由 Agent 层负责）
+    执行指定工具。超时或执行异常会再试 ToolSpec.retries 次。
+    参数错误不重试。结果写入 trace 由 Agent 层负责。
     """
     spec = get_tool_spec(tool_name)
     if not spec:
         return f"未知工具: {tool_name}"
 
+    attempts = max(0, int(spec.retries)) + 1
+    last_error = f"工具执行失败: {tool_name}"
     started = time.perf_counter()
-
-    def _run() -> str:
-        return spec.fn(agent, **tool_args)
-
     try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_run)
-            result = future.result(timeout=spec.timeout_s)
-        return result
-    except FuturesTimeoutError:
-        return f"工具 {tool_name} 执行超时（>{spec.timeout_s}s），请稍后重试。"
-    except TypeError as e:
-        return f"工具参数错误: {str(e)}"
-    except Exception as e:
-        return f"工具执行失败: {str(e)}"
+        for _ in range(attempts):
+            def _run() -> str:
+                return spec.fn(agent, **tool_args)
+
+            try:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_run)
+                    return future.result(timeout=spec.timeout_s)
+            except FuturesTimeoutError:
+                last_error = f"工具 {tool_name} 执行超时（>{spec.timeout_s}s），请稍后重试。"
+            except TypeError as e:
+                return f"工具参数错误: {str(e)}"
+            except Exception as e:
+                last_error = f"工具执行失败: {str(e)}"
+        return last_error
     finally:
         _ = time.perf_counter() - started  # 耗时由 react_agent 记录

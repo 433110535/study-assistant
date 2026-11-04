@@ -197,6 +197,7 @@ class TestEvalRunner(unittest.TestCase):
         self.assertFalse(skipped["applicable"])
         self.assertIsNone(skipped["score"])
         self.assertTrue(missed["empty_context"])
+        self.assertFalse(skipped["empty_context"])
 
     def test_attribution_counts_empty_retrieval_and_unfaithful_answers(self):
         from backend.platform.eval_runner import attribute_failures

@@ -134,5 +134,258 @@ class TestGrading(unittest.TestCase):
         self.assertNotIn("答案:", format_variants(result))
 
 
+class TestGradePaper(unittest.TestCase):
+    """整卷按题号离线判分。期望值是写死的字面结果，不调用模型。"""
+
+    def test_two_numeric_items_one_right_one_wrong_have_no_total(self):
+        from backend.tools.grading import grade_paper
+
+        paper = (
+            "1. 3+4等于多少？\n"
+            "作答：7\n"
+            "标准答案：7\n"
+            "\n"
+            "2. 9-4等于多少？\n"
+            "作答：4\n"
+            "标准答案：5\n"
+        )
+        result = grade_paper(paper)
+        self.assertEqual(set(result), {"items", "graded_count", "ungraded_count"})
+        self.assertEqual(result["graded_count"], 2)
+        self.assertEqual(result["ungraded_count"], 0)
+        self.assertEqual(len(result["items"]), 2)
+        self.assertEqual(result["items"][0]["number"], "1")
+        self.assertEqual(result["items"][0]["question_text"], "3+4等于多少？")
+        self.assertEqual(result["items"][0]["student_answer"], "7")
+        self.assertEqual(result["items"][0]["correct_answer"], "7")
+        self.assertEqual(result["items"][0]["status"], "correct")
+        self.assertEqual(result["items"][0]["score"], 1)
+        self.assertEqual(result["items"][1]["number"], "2")
+        self.assertEqual(result["items"][1]["status"], "incorrect")
+        self.assertEqual(result["items"][1]["score"], 0)
+        self.assertNotIn("total", result)
+        self.assertNotIn("total_score", result)
+
+    def test_missing_key_on_second_item_is_ungraded(self):
+        from backend.tools.grading import grade_paper
+
+        paper = (
+            "1. 3+4等于多少？\n"
+            "作答：7\n"
+            "标准答案：7\n"
+            "\n"
+            "2. 9-4等于多少？\n"
+            "作答：5\n"
+        )
+        result = grade_paper(paper)
+        self.assertEqual(result["items"][0]["status"], "correct")
+        self.assertEqual(result["items"][1]["status"], "ungraded")
+        self.assertIsNone(result["items"][1]["score"])
+        self.assertEqual(result["items"][1]["correct_answer"], "")
+        self.assertEqual(result["graded_count"], 1)
+        self.assertEqual(result["ungraded_count"], 1)
+
+    def test_answer_key_dict_grades_without_inline_key(self):
+        from backend.tools.grading import grade_paper
+
+        paper = (
+            "1. 3+4等于多少？\n"
+            "作答：7\n"
+            "\n"
+            "2、9-4等于多少？\n"
+            "作答：4\n"
+        )
+        result = grade_paper(paper, {"1": "7", "2": "5"})
+        self.assertEqual(result["items"][0]["status"], "correct")
+        self.assertEqual(result["items"][0]["correct_answer"], "7")
+        self.assertEqual(result["items"][1]["number"], "2")
+        self.assertEqual(result["items"][1]["status"], "incorrect")
+        self.assertEqual(result["items"][1]["correct_answer"], "5")
+        self.assertEqual(result["graded_count"], 2)
+        self.assertEqual(result["ungraded_count"], 0)
+
+    def test_supported_item_without_student_answer_is_ungraded(self):
+        from backend.tools.grading import grade_paper
+
+        paper = "1. 3+4等于多少？\n标准答案：7\n"
+        result = grade_paper(paper)
+        self.assertEqual(result["items"][0]["status"], "ungraded")
+        self.assertEqual(result["items"][0]["student_answer"], "")
+        self.assertIsNone(result["items"][0]["score"])
+        self.assertEqual(result["graded_count"], 0)
+        self.assertEqual(result["ungraded_count"], 1)
+
+    def test_unsupported_types_stay_ungraded_even_when_answers_match(self):
+        from backend.tools.grading import grade_paper
+
+        paper = (
+            "1. 多选题：2 和 4 里哪些是偶数？\n"
+            "作答：2\n"
+            "标准答案：2\n"
+            "\n"
+            "2. 小车速度是 3 m/s，行驶多少米？\n"
+            "作答：6\n"
+            "标准答案：6\n"
+            "\n"
+            "3. 解答：为什么 2+2=4？\n"
+            "作答：因为加法\n"
+            "标准答案：因为加法\n"
+            "\n"
+            "（4）____ 加 ____ 等于 5\n"
+            "作答：2\n"
+            "标准答案：2\n"
+            "\n"
+            "第5题 写出圆的面积公式\n"
+            "作答：πr^2\n"
+            "标准答案：πr^2\n"
+        )
+        result = grade_paper(paper)
+        self.assertEqual(
+            [item["status"] for item in result["items"]],
+            ["unsupported", "unsupported", "unsupported", "unsupported", "unsupported"],
+        )
+        self.assertEqual([item["number"] for item in result["items"]], ["1", "2", "3", "4", "5"])
+        self.assertTrue(all(item["score"] is None for item in result["items"]))
+        self.assertEqual(result["graded_count"], 0)
+        self.assertEqual(result["ungraded_count"], 5)
+
+    def test_unsupported_wins_when_answer_is_missing(self):
+        from backend.tools.grading import grade_paper
+
+        paper = "1. 简答：说明什么是加法\n标准答案：加法是合并\n"
+        result = grade_paper(paper)
+        self.assertEqual(result["items"][0]["status"], "unsupported")
+        self.assertEqual(result["items"][0]["student_answer"], "")
+        self.assertEqual(result["graded_count"], 0)
+        self.assertEqual(result["ungraded_count"], 1)
+
+    def test_unit_in_answer_does_not_change_stem_type(self):
+        from backend.tools.grading import grade_paper
+
+        paper = "1. 3+4等于多少？\n作答：7kg\n标准答案：7\n"
+        result = grade_paper(paper)
+        self.assertEqual(result["items"][0]["status"], "incorrect")
+        self.assertEqual(result["items"][0]["score"], 0)
+
+    def test_fraction_still_uses_single_item_equivalence(self):
+        from backend.tools.grading import grade_paper
+
+        paper = "第1题 求值\n作答：1/2\n标准答案：0.5||2/2\n"
+        result = grade_paper(paper)
+        self.assertEqual(result["items"][0]["status"], "correct")
+        self.assertEqual(result["items"][0]["score"], 1)
+
+    def test_empty_or_unnumbered_paper_is_empty_result(self):
+        from backend.tools.grading import grade_paper
+
+        empty = {"items": [], "graded_count": 0, "ungraded_count": 0}
+        self.assertEqual(grade_paper(""), empty)
+        self.assertEqual(grade_paper("   \n没有题号，只有一段话"), empty)
+        self.assertEqual(grade_paper("作答：1\n标准答案：1\n"), empty)
+        self.assertEqual(grade_paper("", {"1": "7"}), empty)
+
+    def test_format_paper_lists_items_without_a_total(self):
+        from backend.tools.grading import format_paper, grade_paper
+
+        paper = (
+            "1. 3+4等于多少？\n"
+            "作答：7\n"
+            "标准答案：7\n"
+            "\n"
+            "2. 9-4等于多少？\n"
+            "作答：4\n"
+            "标准答案：5\n"
+        )
+        text = format_paper(grade_paper(paper))
+        self.assertIn("已判 2", text)
+        self.assertIn("未判 0", text)
+        self.assertIn("第1题", text)
+        self.assertIn("正确", text)
+        self.assertIn("第2题", text)
+        self.assertIn("不正确", text)
+        self.assertNotIn("总分", text)
+
+
+class TestQuizPaperPage(unittest.TestCase):
+    """习题页整卷文本要出现逐题结果。识图用替身，不请求视觉模型。"""
+
+    def _quiz(self):
+        from streamlit.testing.v1 import AppTest
+
+        app = str(PROJECT_ROOT / "frontend" / "app.py")
+        at = AppTest.from_file(app, default_timeout=120)
+        at.session_state["authenticated"] = True
+        at.session_state["auth_user"] = "student"
+        at.session_state["current_page"] = "quiz"
+        at.run()
+        return at
+
+    def test_pasted_paper_shows_each_item(self):
+        from unittest import mock
+
+        paper = (
+            "1. 3+4等于多少？\n"
+            "作答：7\n"
+            "标准答案：7\n"
+            "\n"
+            "2. 9-4等于多少？\n"
+            "作答：4\n"
+            "标准答案：5\n"
+        )
+        with mock.patch(
+            "backend.tools.vision.read_image",
+            side_effect=AssertionError("整卷文本判分不应调用识图"),
+        ):
+            at = self._quiz()
+            self.assertEqual([str(item.value) for item in at.exception], [])
+            at.text_area(key="grade_paper_text").set_value(paper)
+            at.button(key="grade_paper_run").click().run()
+        self.assertEqual([str(item.value) for item in at.exception], [])
+        shown = "\n".join(item.value for item in list(at.text) + list(at.markdown))
+        self.assertIn("第1题", shown)
+        self.assertIn("正确", shown)
+        self.assertIn("第2题", shown)
+        self.assertIn("不正确", shown)
+        self.assertNotIn("总分", shown)
+
+    def test_vision_error_string_is_shown_and_page_survives(self):
+        from unittest import mock
+
+        def fake_read(image_path, focus="全部"):
+            return "未配置 DASHSCOPE_API_KEY，无法识图。请在 .env 中设置通义千问 API Key。"
+
+        with mock.patch("backend.tools.vision.read_image", side_effect=fake_read):
+            at = self._quiz()
+            at.file_uploader(key="grade_paper_image").set_value(
+                ("paper.png", b"\x89PNG\r\n\x1a\n", "image/png")
+            )
+            at.button(key="grade_paper_run").click().run()
+        self.assertEqual([str(item.value) for item in at.exception], [])
+        errors = "\n".join(item.value for item in at.error)
+        self.assertIn("DASHSCOPE_API_KEY", errors)
+        shown = "\n".join(item.value for item in at.text)
+        self.assertNotIn("第1题", shown)
+
+    def test_replaced_vision_text_is_graded_offline(self):
+        from unittest import mock
+
+        paper = "1. 3+4等于多少？\n作答：7\n标准答案：7\n"
+
+        def fake_read(image_path, focus="全部"):
+            return paper
+
+        with mock.patch("backend.tools.vision.read_image", side_effect=fake_read):
+            at = self._quiz()
+            at.file_uploader(key="grade_paper_image").set_value(
+                ("paper.png", b"\x89PNG\r\n\x1a\n", "image/png")
+            )
+            at.button(key="grade_paper_run").click().run()
+        self.assertEqual([str(item.value) for item in at.exception], [])
+        shown = "\n".join(item.value for item in list(at.text) + list(at.markdown))
+        self.assertIn("第1题", shown)
+        self.assertIn("正确", shown)
+        self.assertNotIn("总分", shown)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

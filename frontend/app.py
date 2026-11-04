@@ -22,6 +22,7 @@ from backend.tools.plan_generator import generate_study_plan, create_daily_sched
 from backend.tools.question_generator import generate_questions, check_answer
 from backend.config import validate_config, LLM_MODEL, UPLOADS_DIR
 import re
+import tempfile
 import uuid
 
 # 平台标识：打开的书页 + 知识节点 + 右上角火花
@@ -1393,6 +1394,108 @@ def render_quiz():
     _render_standard_grade()
 
 
+_VISION_ERROR_PREFIXES = (
+    "图片不存在或不可读",
+    "未配置 DASHSCOPE_API_KEY",
+    "读取图片失败",
+    "图片预处理失败",
+    "视觉模型调用失败",
+    "视觉模型返回错误",
+    "未能从模型响应中解析识别文本",
+    "识图失败",
+)
+
+
+def _is_vision_error(text: str) -> bool:
+    stripped = (text or "").strip()
+    return any(stripped.startswith(prefix) for prefix in _VISION_ERROR_PREFIXES)
+
+
+def _grade_uploaded_paper(uploaded_file):
+    """先识图，再离线整卷判分。失败时返回错误字符串，不抛异常。"""
+    suffix = Path(getattr(uploaded_file, "name", "")).suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    try:
+        Path(path).write_bytes(uploaded_file.getvalue())
+        try:
+            from backend.tools.vision import read_image
+
+            recognized = read_image(path)
+        except Exception as exc:
+            return "", None, f"识图失败: {exc}"
+        if not isinstance(recognized, str):
+            recognized = str(recognized)
+        if _is_vision_error(recognized):
+            return "", None, recognized
+        from backend.tools.grading import grade_paper
+
+        return recognized, grade_paper(recognized), None
+    except Exception as exc:
+        return "", None, f"识图失败: {exc}"
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def _render_paper_grade():
+    """整卷文本或图片。判分本身不调用模型。"""
+    from backend.tools.grading import format_paper, grade_paper
+
+    st.markdown("**整卷逐题**")
+    st.caption(
+        "按题号粘贴整卷，或上传试卷图片。图片会先走现有识图，再离线判分。"
+        "只列出每题结果和已判、未判数量，不把各题加总。"
+        "多选、多空、带单位、公式和解答题不会硬判。"
+    )
+    paper = st.text_area(
+        "整卷文本",
+        height=180,
+        key="grade_paper_text",
+        placeholder="1. 3+4等于多少？\n作答：7\n标准答案：7",
+    )
+    image = st.file_uploader(
+        "试卷图片（可选）",
+        type=["jpg", "jpeg", "png", "webp"],
+        key="grade_paper_image",
+        help="上传后用现有识图得到文本，再做离线整卷判分",
+    )
+    if st.button("整卷判分", type="primary", key="grade_paper_run"):
+        if image is not None:
+            try:
+                recognized, graded, error = _grade_uploaded_paper(image)
+            except Exception as exc:
+                recognized, graded, error = "", None, f"识图失败: {exc}"
+            if error:
+                st.session_state["paper_vision_error"] = error
+                st.session_state.pop("paper_report", None)
+                st.session_state.pop("paper_source_text", None)
+            else:
+                st.session_state["paper_vision_error"] = ""
+                st.session_state["paper_source_text"] = recognized
+                st.session_state["paper_report"] = graded
+        else:
+            text = (paper or "").strip()
+            if not text:
+                st.warning("请先粘贴整卷文本，或上传试卷图片")
+            else:
+                st.session_state["paper_vision_error"] = ""
+                st.session_state.pop("paper_source_text", None)
+                st.session_state["paper_report"] = grade_paper(text)
+
+    error = st.session_state.get("paper_vision_error") or ""
+    if error:
+        st.error(error)
+    source = st.session_state.get("paper_source_text") or ""
+    if source:
+        st.caption("识别文本")
+        st.text(source)
+    paper_report = st.session_state.get("paper_report")
+    if paper_report:
+        st.text(format_paper(paper_report))
+
+
 def _render_standard_grade():
     """有标准答案时本地判分，不调用模型。错题仍要到错题本确认。"""
     from backend.platform.mistake_store import create_pending
@@ -1431,37 +1534,35 @@ def _render_standard_grade():
         }
 
     report = st.session_state.get("grade_report")
-    if not report:
-        return
+    if report:
+        graded = report["graded"]
+        labels = {"correct": "正确", "incorrect": "不正确", "ungraded": "未判分"}
+        st.markdown(f"**{labels.get(graded['status'], graded['status'])}**")
+        st.text(graded.get("reason") or "")
+        diagnosed = report.get("diagnosed")
+        if diagnosed and diagnosed.get("error_type"):
+            st.text(f"错因：{diagnosed['error_type']}。{diagnosed.get('summary') or ''}")
+        variants = report.get("variants") or {}
+        if variants.get("status") == "ready":
+            st.markdown("**变式（不附答案）**")
+            for index, item in enumerate(variants.get("items") or [], start=1):
+                st.text(f"{index}. {item['stem']}")
+        elif variants.get("status") == "unsupported":
+            st.caption(variants.get("reason") or "")
 
-    graded = report["graded"]
-    labels = {"correct": "正确", "incorrect": "不正确", "ungraded": "未判分"}
-    st.markdown(f"**{labels.get(graded['status'], graded['status'])}**")
-    st.text(graded.get("reason") or "")
-    diagnosed = report.get("diagnosed")
-    if diagnosed and diagnosed.get("error_type"):
-        st.text(f"错因：{diagnosed['error_type']}。{diagnosed.get('summary') or ''}")
-    variants = report.get("variants") or {}
-    if variants.get("status") == "ready":
-        st.markdown("**变式（不附答案）**")
-        for index, item in enumerate(variants.get("items") or [], start=1):
-            st.text(f"{index}. {item['stem']}")
-    elif variants.get("status") == "unsupported":
-        st.caption(variants.get("reason") or "")
+        if graded["status"] == "incorrect" and st.button("记入错题本", key="grade_save"):
+            create_pending(
+                user_id=st.session_state.get("auth_user") or "student",
+                subject=(report.get("subject") or "").strip() or "未填写",
+                concept=(report.get("concept") or "").strip() or "未命名考点",
+                error_type=(diagnosed or {}).get("error_type") or "其他",
+                question_text=report.get("question") or "",
+                student_answer=report.get("student") or "",
+                correct_answer=report.get("correct") or "",
+            )
+            st.success("已写入待确认错题。到「错题本」确认后才会进入复习。")
 
-    if graded["status"] != "incorrect":
-        return
-    if st.button("记入错题本", key="grade_save"):
-        create_pending(
-            user_id=st.session_state.get("auth_user") or "student",
-            subject=(report.get("subject") or "").strip() or "未填写",
-            concept=(report.get("concept") or "").strip() or "未命名考点",
-            error_type=(diagnosed or {}).get("error_type") or "其他",
-            question_text=report.get("question") or "",
-            student_answer=report.get("student") or "",
-            correct_answer=report.get("correct") or "",
-        )
-        st.success("已写入待确认错题。到「错题本」确认后才会进入复习。")
+    _render_paper_grade()
 
 
 def render_kb():

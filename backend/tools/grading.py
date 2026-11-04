@@ -1,7 +1,7 @@
 """
-对照标准答案判分、错因归类、同结构变式。
+对照标准答案判分、错因归类、同结构变式，以及整卷逐题判分。
 
-不调用大模型。没有标准答案时返回 ungraded，不编造分数。
+不调用大模型，整卷判分也不调用识图。没有标准答案时返回 ungraded，不编造分数，也不生成整卷总分。
 变式替换题干里的数字，或预先列出的人名和常见物品。文字变式不重复原题。没有可替换的部分就拒绝，不调用模型。
 """
 from __future__ import annotations
@@ -93,6 +93,155 @@ def grade_item(
         if student_num is not None and answer_num is not None and _close(student_num, answer_num):
             return {"status": "correct", "score": 1, "reason": "数值与标准答案一致"}
     return {"status": "incorrect", "score": 0, "reason": "与标准答案不一致"}
+
+
+# 题号写在行首：1. / 1、 / （1） / 第1题。小数点后面紧跟数字时不当成题号。
+_QUESTION_HEAD_RE = re.compile(
+    r"(?m)^[ \t]*(?:"
+    r"第\s*(\d+)\s*题"
+    r"|[（(]\s*(\d+)\s*[）)]"
+    r"|(\d+)[\.．](?!\d)"
+    r"|(\d+)、"
+    r")"
+)
+_ANSWER_MARK_RE = re.compile(r"^(作答|标准答案)\s*[:：]\s*(.*)$")
+# 两个及以上才算多空：连续下划线，或一对空的括号。
+_BLANK_RE = re.compile(r"_{3,}|（\s*）|\(\s*\)")
+_UNIT_RE = re.compile(
+    r"(?i)(?<![A-Za-z])(?:kg|mg|cm|mm|km|dm|m/s|km/h|cm/s)(?![A-Za-z])"
+)
+_LATEX_RE = re.compile(
+    r"\$[^$\n]+\$|\\\(|\\\[|\\frac\b|\\sqrt\b|\\sum\b|\\int\b|\\begin\{"
+)
+_ESSAY_RE = re.compile(r"解答|证明|简答")
+_STATUS_LABELS = {
+    "correct": "正确",
+    "incorrect": "不正确",
+    "ungraded": "未判分",
+    "unsupported": "题型不支持",
+}
+
+
+def _canon_number(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    match = re.search(r"\d+", text)
+    if not match:
+        return text
+    return match.group(0).lstrip("0") or "0"
+
+
+def _split_questions(text: str) -> List[tuple]:
+    matches = list(_QUESTION_HEAD_RE.finditer(text))
+    blocks = []
+    for index, match in enumerate(matches):
+        number = next(group for group in match.groups() if group)
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        blocks.append((_canon_number(number), text[start:end]))
+    return blocks
+
+
+def _parse_question_body(body: str) -> tuple:
+    """从一道题的正文里分开题干、作答和行内标准答案。"""
+    stem_lines: List[str] = []
+    student_lines: List[str] = []
+    correct_lines: List[str] = []
+    mode = "stem"
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        mark = _ANSWER_MARK_RE.match(line)
+        if mark:
+            kind, rest = mark.group(1), mark.group(2).strip()
+            mode = "correct" if kind == "标准答案" else "student"
+            if rest:
+                (correct_lines if mode == "correct" else student_lines).append(rest)
+            continue
+        target = {"stem": stem_lines, "student": student_lines, "correct": correct_lines}[mode]
+        target.append(line)
+    return (
+        "\n".join(stem_lines).strip(),
+        "\n".join(student_lines).strip(),
+        "\n".join(correct_lines).strip(),
+    )
+
+
+def _lookup_answer_key(answer_key: Optional[Dict[str, Any]], number: str) -> str:
+    if not isinstance(answer_key, dict):
+        return ""
+    wanted = _canon_number(number)
+    for key, value in answer_key.items():
+        if _canon_number(key) != wanted:
+            continue
+        if value is None:
+            return ""
+        return str(value).strip()
+    return ""
+
+
+def _unsupported_reason(stem: str) -> str:
+    """只看题干的字面规则。命中则不要交给 grade_item。"""
+    text = stem or ""
+    if "多选" in text:
+        return "多选不在离线判分范围内"
+    if len(_BLANK_RE.findall(text)) >= 2:
+        return "多空不在离线判分范围内"
+    if _UNIT_RE.search(text):
+        return "带单位的题不在离线判分范围内"
+    if "公式" in text or _LATEX_RE.search(text):
+        return "公式题不在离线判分范围内"
+    if _ESSAY_RE.search(text):
+        return "解答题不在离线判分范围内"
+    return ""
+
+
+def grade_paper(
+    paper_text: str,
+    answer_key: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """按题号拆整卷，并用 grade_item 做离线判分。
+
+    不调用识图或大模型，也不生成整卷总分。
+    标准答案写在「标准答案：」行，或由 answer_key 按题号提供。两边都有时以 answer_key 为准。
+    题型不支持时 status 为 unsupported，即使没有作答也不改成 ungraded。
+    """
+    # 题干按原样保留。全半角折算只发生在 grade_item 比较答案时。
+    text = paper_text or ""
+    items: List[Dict[str, Any]] = []
+    for number, body in _split_questions(text):
+        question_text, student_answer, inline_correct = _parse_question_body(body)
+        keyed = _lookup_answer_key(answer_key, number)
+        correct_answer = keyed if keyed else inline_correct
+        reason = _unsupported_reason(question_text)
+        if reason:
+            status: str = "unsupported"
+            score = None
+        elif not correct_answer or not student_answer:
+            status = "ungraded"
+            score = None
+            reason = "没有标准答案，不能判分" if not correct_answer else "没有作答，不能判分"
+        else:
+            graded = grade_item(question_text, student_answer, correct_answer)
+            status = graded["status"] if graded["status"] in {"correct", "incorrect"} else "ungraded"
+            score = graded["score"] if status in {"correct", "incorrect"} else None
+            reason = graded.get("reason") or ""
+        items.append(
+            {
+                "number": number,
+                "question_text": question_text,
+                "student_answer": student_answer,
+                "correct_answer": correct_answer,
+                "status": status,
+                "score": score,
+                "reason": reason,
+            }
+        )
+    return {
+        "items": items,
+        "graded_count": sum(item["status"] in {"correct", "incorrect"} for item in items),
+        "ungraded_count": sum(item["status"] in {"ungraded", "unsupported"} for item in items),
+    }
 
 
 def _numbers_in(text: str) -> List[float]:
@@ -367,6 +516,31 @@ def format_grade(result: Dict[str, Any]) -> str:
         lines.append("下一步：调用 diagnose_error。用户要求记入错题本时再调用 save_mistake。")
     if result.get("status") == "ungraded":
         lines.append("不要告诉用户这道题已经判对或判错。")
+    return "\n".join(lines)
+
+
+def format_paper(result: Dict[str, Any]) -> str:
+    """给页面展示逐题结果。只写已判、未判数量，不写整卷分数。"""
+    lines = [
+        f"已判 {result.get('graded_count', 0)} 题",
+        f"未判 {result.get('ungraded_count', 0)} 题",
+    ]
+    items = result.get("items") or []
+    if not items:
+        lines.append("没有识别到带题号的题目。")
+        return "\n".join(lines)
+    for item in items:
+        status = _STATUS_LABELS.get(item.get("status"), item.get("status") or "")
+        score = item.get("score")
+        score_text = "不计分" if score is None else str(score)
+        lines.append(f"第{item.get('number')}题 {status}（{score_text}）")
+        question = (item.get("question_text") or "").strip()
+        if question:
+            lines.append(f"题干: {question}")
+        lines.append(f"作答: {item.get('student_answer') or ''}")
+        lines.append(f"标准答案: {item.get('correct_answer') or ''}")
+        if item.get("reason"):
+            lines.append(f"说明: {item['reason']}")
     return "\n".join(lines)
 
 

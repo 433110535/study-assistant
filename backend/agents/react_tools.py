@@ -4,9 +4,10 @@ OpenAI function calling 格式的工具 schema + 执行器（经工具注册表�
 """
 from __future__ import annotations
 
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 from backend.agents.tool_registry import ToolSpec, get_tool_schemas, get_tool_spec, register_tool
 
@@ -752,20 +753,48 @@ def _register_all_tools() -> None:
 _register_all_tools()
 
 
-def execute_tool(agent, tool_name: str, tool_args: Dict[str, Any]) -> str:
+# 重试间隔 = min(封顶, 基数 * 2^attempt) + 抖动。attempt 从 0 起，抖动加在封顶之外。
+_BACKOFF_BASE_S = 0.5
+_BACKOFF_CAP_S = 8.0
+_BACKOFF_JITTER_S = 0.25
+
+
+def _backoff_seconds(attempt: int, jitter_s: float) -> float:
+    """第 attempt 次失败后、下一次尝试前要等的秒数。"""
+    growth = _BACKOFF_BASE_S * (2 ** attempt)
+    return min(_BACKOFF_CAP_S, growth) + jitter_s
+
+
+def _sample_backoff_jitter() -> float:
+    """默认抖动：均匀分布在 [0, 0.25) 秒。"""
+    return random.uniform(0.0, _BACKOFF_JITTER_S)
+
+
+def execute_tool(
+    agent,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    *,
+    sleeper: Optional[Callable[[float], None]] = None,
+    jitter: Optional[Callable[[], float]] = None,
+) -> str:
     """
     执行指定工具。超时或执行异常会再试 ToolSpec.retries 次。
-    参数错误不重试。结果写入 trace 由 Agent 层负责。
+    两次尝试之间等待 min(8, 0.5 * 2^attempt) 秒，再加 [0, 0.25) 秒抖动。
+    参数错误不重试、不等待。sleeper 与 jitter 可注入，测试不必真睡。
+    结果写入 trace 由 Agent 层负责。
     """
     spec = get_tool_spec(tool_name)
     if not spec:
         return f"未知工具: {tool_name}"
 
+    sleep = sleeper if sleeper is not None else time.sleep
+    sample_jitter = jitter if jitter is not None else _sample_backoff_jitter
     attempts = max(0, int(spec.retries)) + 1
     last_error = f"工具执行失败: {tool_name}"
     started = time.perf_counter()
     try:
-        for _ in range(attempts):
+        for attempt in range(attempts):
             def _run() -> str:
                 return spec.fn(agent, **tool_args)
 
@@ -779,6 +808,9 @@ def execute_tool(agent, tool_name: str, tool_args: Dict[str, Any]) -> str:
                 return f"工具参数错误: {str(e)}"
             except Exception as e:
                 last_error = f"工具执行失败: {str(e)}"
+
+            if attempt + 1 < attempts:
+                sleep(_backoff_seconds(attempt, sample_jitter()))
         return last_error
     finally:
         _ = time.perf_counter() - started  # 耗时由 react_agent 记录

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -52,6 +53,9 @@ def load_dataset(path: Optional[Path] = None) -> Dict[str, Any]:
                 raise ValueError(f"检索样本缺少固定片段: {item.get('id')}")
             if not isinstance(answer, str) or not answer.strip():
                 raise ValueError(f"检索样本缺少参考回答: {item.get('id')}")
+    raw = dataset_path.read_bytes()
+    data["_source_path"] = str(dataset_path)
+    data["_content_hash"] = hashlib.sha256(raw).hexdigest()
     return data
 
 
@@ -123,6 +127,11 @@ def save_eval_run(
 ) -> str:
     path = Path(db_path or TRACE_DB_PATH)
     ensure_eval_tables(path)
+    source = dataset.get("_source_path")
+    if source:
+        from backend.platform.dataset_catalog import register_file
+
+        register_file(Path(source), db_path=path)
     run_id = str(uuid.uuid4())
     passed = sum(1 for item in results if item["passed"])
     now = _utc_now()

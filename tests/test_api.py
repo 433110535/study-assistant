@@ -343,6 +343,30 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["text"], "递归|编程|中级")
 
+    def test_compare_route_uses_the_injected_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+
+        def fake(concept1: str, concept2: str) -> str:
+            return f"{concept1} vs {concept2}"
+
+        app = create_app(self.db, api_key="secret", compare_fn=fake)
+        with TestClient(app) as client:
+            empty = client.post(
+                "/v1/compare",
+                json={"concept1": "列表", "concept2": " "},
+                headers=self._headers(),
+            )
+            self.assertEqual(empty.status_code, 400)
+            ok = client.post(
+                "/v1/compare",
+                json={"concept1": "列表", "concept2": "元组"},
+                headers=self._headers(),
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["text"], "列表 vs 元组")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

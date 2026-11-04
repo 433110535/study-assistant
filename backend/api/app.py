@@ -45,6 +45,7 @@ def create_app(
     api_key: str = "",
     agent_factory: Optional[Callable[[], Any]] = None,
     explain_fn: Optional[Callable[..., str]] = None,
+    compare_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -215,6 +216,19 @@ def create_app(
 
             fn = explain_concept
         return {"text": fn(concept, subject, level)}
+
+    @app.post("/v1/compare", dependencies=guard)
+    def compare(payload: dict = Body(...)) -> dict:
+        left = str(payload.get("concept1") or "").strip()
+        right = str(payload.get("concept2") or "").strip()
+        if not left or not right:
+            raise HTTPException(status_code=400, detail="需要两个概念")
+        fn = compare_fn
+        if fn is None:
+            from backend.tools.knowledge import compare_concepts
+
+            fn = compare_concepts
+        return {"text": fn(left, right)}
 
     return app
 

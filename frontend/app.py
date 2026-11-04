@@ -16,7 +16,6 @@ sys.path.insert(0, str(project_root))
 
 from backend.agents.react_agent import ReActStudyAgent
 from backend.llm_helper import text_content
-from backend.tools.knowledge import break_down_concept, compare_concepts
 from backend.tools.plan_generator import generate_study_plan, create_daily_schedule, generate_milestone_checklist
 from backend.tools.question_generator import generate_questions, check_answer
 from backend.config import validate_config, LLM_MODEL, UPLOADS_DIR
@@ -1050,7 +1049,7 @@ def render_knowledge():
 
 def render_compare():
     page_header("compare", chips=[
-        "<b>输出</b> 差异对照",
+        "<b>输出</b> /v1/compare",
         "<b>范围</b> 定义 / 场景 / 边界",
     ])
 
@@ -1069,7 +1068,9 @@ def render_compare():
                 if concept1.strip() and concept2.strip():
                     with st.spinner("正在对比概念，请稍候…"):
                         try:
-                            result = compare_concepts(concept1, concept2)
+                            from backend.api.local_client import compare_text
+
+                            result = compare_text(concept1, concept2)
                             st.session_state.last_compare = result
                             st.session_state.last_compare_meta = {"c1": concept1, "c2": concept2}
                             for item in (concept1, concept2):

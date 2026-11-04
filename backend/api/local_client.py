@@ -72,6 +72,20 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def compare_text(
+    concept1: str,
+    concept2: str,
+    db_path: Optional[Path] = None,
+) -> str:
+    data = request_json(
+        "POST",
+        "/v1/compare",
+        db_path=db_path,
+        json_body={"concept1": concept1, "concept2": concept2},
+    )
+    return str(data.get("text") or "")
+
+
 def explain_text(
     concept: str,
     subject: str = "",

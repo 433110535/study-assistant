@@ -119,6 +119,7 @@ PAGES = [
     ("daily", "07", "SCHEDULE", "日程安排", "每日时间表"),
     ("quiz", "08", "PRACTICE", "习题练习", "出题与批改"),
     ("kb", "09", "KNOWLEDGE BASE", "向量知识库", "RAG 检索"),
+    ("mistakes", "10", "MISTAKES", "错题本", "确认后进入复习"),
 ]
 PAGE_META = {page[0]: page[1:] for page in PAGES}
 
@@ -209,6 +210,7 @@ def init_session_state():
         try:
             validate_config()
             st.session_state.agent = ReActStudyAgent(verbose=False)
+            st.session_state.agent.user_id = st.session_state.get("auth_user") or "student"
             st.session_state.initialized = True
             st.session_state.start_time = datetime.now()
         except ValueError as e:
@@ -252,6 +254,7 @@ def _restore_chat_session() -> None:
     agent = st.session_state.get("agent")
     if agent is not None:
         agent.session_id = session_id
+        agent.user_id = user_id
         agent.chat_history = [dict(item) for item in messages]
 
 
@@ -446,7 +449,7 @@ def render_sidebar():
             st.stop()
 
         st.markdown(
-            '<div class="rail-label"><span>Workspace</span><span>9 modules</span></div>',
+            '<div class="rail-label"><span>Workspace</span><span>10 modules</span></div>',
             unsafe_allow_html=True,
         )
 
@@ -1800,6 +1803,61 @@ def render_kb():
             st.warning("提示：知识库为空，请先上传PDF文档")
 
 
+def render_mistakes():
+    """错题本：Agent 写入的记录需人工确认后才进入复习。"""
+    from backend.platform.mistake_store import (
+        confirm_mistake,
+        dismiss_mistake,
+        list_mistakes,
+    )
+
+    page_header("mistakes", chips=[
+        "<b>写入</b> 默认待确认",
+        "<b>复习</b> 确认后次日",
+    ])
+    user_id = st.session_state.get("auth_user") or "student"
+    pending = list_mistakes(user_id, status="pending")
+    confirmed = list_mistakes(user_id, status="confirmed")
+
+    section_head("01", "待确认", "PENDING")
+    if not pending:
+        empty_state(
+            "EMPTY",
+            "没有待确认错题",
+            "在问答里明确说「记入错题本」后，记录会出现在这里。确认前不会进入复习。",
+        )
+    for item in pending:
+        with st.container(border=True):
+            st.markdown(
+                f"**{html.escape(item['concept'])}** · {html.escape(item['subject'])} · "
+                f"{html.escape(item['error_type'])}"
+            )
+            st.write(item["question_text"])
+            if item.get("student_answer"):
+                st.caption(f"你的答案：{item['student_answer']}")
+            if item.get("correct_answer"):
+                st.caption(f"正确答案：{item['correct_answer']}")
+            yes_col, no_col = st.columns(2)
+            with yes_col:
+                if st.button("确认并加入复习", key=f"confirm_{item['id']}", type="primary"):
+                    confirm_mistake(item["id"])
+                    st.rerun()
+            with no_col:
+                if st.button("丢弃", key=f"dismiss_{item['id']}"):
+                    dismiss_mistake(item["id"])
+                    st.rerun()
+
+    section_head("02", "复习队列", "REVIEW")
+    if not confirmed:
+        empty_state("QUEUE", "复习队列为空", "确认后的错题会在次日进入复习时间。")
+        return
+    for item in confirmed:
+        st.markdown(
+            f"- **{html.escape(item['concept'])}**（{html.escape(item['error_type'])}）"
+            f" · 下次复习 {html.escape(item.get('next_review_at') or '—')}"
+        )
+
+
 def render_react_visualization():
     """思维链可视化页面 - 以时间线展示 ReAct 推理过程"""
     page_header("react_viz", chips=[
@@ -1952,6 +2010,8 @@ def main():
             render_quiz()
         elif page == 'kb':
             render_kb()
+        elif page == 'mistakes':
+            render_mistakes()
         elif page == 'react_viz':
             render_react_visualization()
 

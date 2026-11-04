@@ -171,7 +171,7 @@ class TestFrontend(unittest.TestCase):
 
     PAGES = [
         "dashboard", "qa", "react_viz", "knowledge", "compare",
-        "planner", "daily", "quiz", "kb",
+        "planner", "daily", "quiz", "kb", "mistakes",
     ]
 
     def test_pages_render(self):

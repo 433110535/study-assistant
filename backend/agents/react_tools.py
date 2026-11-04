@@ -66,6 +66,33 @@ def _execute_generate_questions(
     return generate_questions(topic, difficulty=difficulty, count=count, llm=agent.llm)
 
 
+def _execute_save_mistake(
+    agent,
+    subject: str,
+    concept: str,
+    error_type: str,
+    question_text: str,
+    student_answer: str = "",
+    correct_answer: str = "",
+) -> str:
+    from backend.platform.mistake_store import create_pending
+
+    user_id = getattr(agent, "user_id", None) or "student"
+    mistake_id = create_pending(
+        user_id=user_id,
+        subject=subject,
+        concept=concept,
+        error_type=error_type,
+        question_text=question_text,
+        student_answer=student_answer,
+        correct_answer=correct_answer,
+    )
+    return (
+        f"已生成待确认错题（id={mistake_id}）。"
+        "它还不会进入复习，请用户在「错题本」页面确认或丢弃。"
+    )
+
+
 def _execute_read_image(agent, image_path: str, focus: str = "全部") -> str:
     from backend.tools.vision import read_image
 
@@ -241,6 +268,48 @@ def _register_all_tools() -> None:
             side_effects=False,
             cost_hint="vl:1 次调用",
             timeout_s=90,
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="save_mistake",
+            fn=_execute_save_mistake,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "save_mistake",
+                    "description": (
+                        "把一道错题记为待确认记录。调用后必须告诉用户到「错题本」确认，"
+                        "未确认前不会进入复习。适用于用户明确说「记下来 / 加入错题本」。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string", "description": "学科"},
+                            "concept": {"type": "string", "description": "考点或概念"},
+                            "error_type": {
+                                "type": "string",
+                                "description": "错因：概念不清 / 计算失误 / 审题错误 / 其他",
+                            },
+                            "question_text": {"type": "string", "description": "题干"},
+                            "student_answer": {
+                                "type": "string",
+                                "description": "学生的答案",
+                                "default": "",
+                            },
+                            "correct_answer": {
+                                "type": "string",
+                                "description": "正确答案，未知可留空",
+                                "default": "",
+                            },
+                        },
+                        "required": ["subject", "concept", "error_type", "question_text"],
+                    },
+                },
+            },
+            side_effects=True,
+            requires_approval=True,
+            cost_hint="sqlite:1 写",
         )
     )
 

@@ -19,6 +19,26 @@ from fastapi.responses import StreamingResponse
 from backend.config import TRACE_DB_PATH
 
 
+def _plan_days(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    days = int(value)
+    if days < 7 or days > 90:
+        return None
+    return days
+
+
+def _plan_hours(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    hours = float(value)
+    if hours < 0.5 or hours > 8:
+        return None
+    return hours
+
+
 def _question_count(value: Any) -> Optional[int]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -58,6 +78,7 @@ def create_app(
     explain_fn: Optional[Callable[..., str]] = None,
     compare_fn: Optional[Callable[..., str]] = None,
     questions_fn: Optional[Callable[..., str]] = None,
+    plan_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -258,6 +279,24 @@ def create_app(
 
             fn = generate_questions
         return {"text": fn(topic, difficulty, count, question_type)}
+
+    @app.post("/v1/plans", dependencies=guard)
+    def plans(payload: dict = Body(...)) -> dict:
+        subject = str(payload.get("subject") or "").strip()
+        goal = str(payload.get("goal") or "").strip()
+        days = _plan_days(payload.get("duration_days", 30))
+        hours = _plan_hours(payload.get("hours_per_day", 2))
+        if not subject or not goal:
+            raise HTTPException(status_code=400, detail="subject 和 goal 不能为空")
+        if days is None or hours is None:
+            raise HTTPException(status_code=400, detail="学习天数须为 7 到 90，每日时长须为 0.5 到 8 小时")
+        level = str(payload.get("current_level") or "初学者")
+        fn = plan_fn
+        if fn is None:
+            from backend.tools.plan_generator import generate_study_plan
+
+            fn = generate_study_plan
+        return {"text": fn(subject, goal, days, level, hours)}
 
     return app
 

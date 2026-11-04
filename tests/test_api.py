@@ -393,6 +393,42 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["text"], "列表|基础|2|填空题")
 
+    def test_plan_route_uses_the_injected_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+
+        def fake(subject, goal, duration_days, current_level="初学者", hours_per_day=2.0):
+            return f"{subject}|{goal}|{duration_days}|{current_level}|{hours_per_day}"
+
+        app = create_app(self.db, api_key="secret", plan_fn=fake)
+        with TestClient(app) as client:
+            empty = client.post(
+                "/v1/plans",
+                json={"subject": "数学", "goal": " "},
+                headers=self._headers(),
+            )
+            self.assertEqual(empty.status_code, 400)
+            bad_days = client.post(
+                "/v1/plans",
+                json={"subject": "数学", "goal": "会做题", "duration_days": 3},
+                headers=self._headers(),
+            )
+            self.assertEqual(bad_days.status_code, 400)
+            ok = client.post(
+                "/v1/plans",
+                json={
+                    "subject": "数学",
+                    "goal": "会做题",
+                    "duration_days": 14,
+                    "current_level": "初学者",
+                    "hours_per_day": 1.5,
+                },
+                headers=self._headers(),
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["text"], "数学|会做题|14|初学者|1.5")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 
 from backend.agents.react_agent import ReActStudyAgent
 from backend.llm_helper import text_content
-from backend.tools.plan_generator import generate_study_plan, create_daily_schedule, generate_milestone_checklist
+from backend.tools.plan_generator import create_daily_schedule, generate_milestone_checklist
 from backend.config import validate_config, LLM_MODEL, UPLOADS_DIR
 import re
 import tempfile
@@ -1114,7 +1114,7 @@ def render_compare():
 
 def render_planner():
     page_header("planner", chips=[
-        "<b>拆解</b> 目标 → 阶段 → 任务",
+        "<b>生成</b> /v1/plans",
         "<b>周期</b> 7–90 天",
     ])
 
@@ -1148,7 +1148,9 @@ def render_planner():
         if submitted and subject and goal:
             with st.spinner("正在制定个性化计划，请稍候…"):
                 try:
-                    plan = generate_study_plan(subject, goal, duration_days, current_level, hours_per_day)
+                    from backend.api.local_client import plan_text
+
+                    plan = plan_text(subject, goal, int(duration_days), current_level, float(hours_per_day))
                     st.session_state.last_plan = plan
                     # 新计划使用全新进度，避免沿用上一份计划的勾选状态
                     st.session_state.plan_progress = {}

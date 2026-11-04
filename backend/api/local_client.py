@@ -72,6 +72,29 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def plan_text(
+    subject: str,
+    goal: str,
+    duration_days: int,
+    current_level: str = "初学者",
+    hours_per_day: float = 2.0,
+    db_path: Optional[Path] = None,
+) -> str:
+    data = request_json(
+        "POST",
+        "/v1/plans",
+        db_path=db_path,
+        json_body={
+            "subject": subject,
+            "goal": goal,
+            "duration_days": duration_days,
+            "current_level": current_level,
+            "hours_per_day": hours_per_day,
+        },
+    )
+    return str(data.get("text") or "")
+
+
 def questions_text(
     topic: str,
     difficulty: str = "中等",

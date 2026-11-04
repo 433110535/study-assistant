@@ -2,12 +2,13 @@
 对照标准答案判分、错因归类、同结构变式。
 
 不调用大模型。没有标准答案时返回 ungraded，不编造分数。
-变式替换题干里的数字，或预先列出的人名和常见物品。没有可替换的部分就拒绝，不调用模型。
+变式替换题干里的数字，或预先列出的人名和常见物品。文字变式不重复原题。没有可替换的部分就拒绝，不调用模型。
 """
 from __future__ import annotations
 
 import ast
 import hashlib
+import math
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional
@@ -266,6 +267,28 @@ def _rotate_surface(word: str, steps: int) -> str:
     return word
 
 
+def _surface_cycle(spans: List[tuple]) -> int:
+    """各组词表长度的最小公倍数。再转这么多步会回到原词。"""
+    cycle = 1
+    for _, _, word in spans:
+        for group in _SURFACE_GROUPS:
+            if word in group:
+                cycle = math.lcm(cycle, len(group))
+                break
+    return cycle
+
+
+def _render_rotated(question: str, spans: List[tuple], steps: int) -> str:
+    pieces = []
+    cursor = 0
+    for start, end, word in spans:
+        pieces.append(question[cursor:start])
+        pieces.append(_rotate_surface(word, steps))
+        cursor = end
+    pieces.append(question[cursor:])
+    return "".join(pieces)
+
+
 def _swap_surface(question: str, count: int) -> Dict[str, Any]:
     spans = _surface_spans(question)
     if not spans:
@@ -275,20 +298,30 @@ def _swap_surface(question: str, count: int) -> Dict[str, Any]:
             "reason": "题干里没有可替换的数字、人名或常见物品，不能生成同结构变式",
         }
     items = []
-    for index in range(count):
-        pieces = []
-        cursor = 0
-        for start, end, word in spans:
-            pieces.append(question[cursor:start])
-            pieces.append(_rotate_surface(word, index + 1))
-            cursor = end
-        pieces.append(question[cursor:])
-        items.append({"stem": "".join(pieces), "answer": None})
+    seen = {question}
+    # 步数对词表长度取余会绕回原词。凑不满 count 时少返回，不把原题塞回去。
+    for steps in range(1, _surface_cycle(spans)):
+        if len(items) >= count:
+            break
+        stem = _render_rotated(question, spans, steps)
+        if stem in seen:
+            continue
+        seen.add(stem)
+        items.append({"stem": stem, "answer": None})
+    if not items:
+        return {
+            "status": "unsupported",
+            "items": [],
+            "reason": "题干里没有可替换的数字、人名或常见物品，不能生成同结构变式",
+        }
     return {"status": "ready", "items": items, "reason": ""}
 
 
 def make_variants(question_text: str, count: int = 3) -> Dict[str, Any]:
-    """替换数字，或预先列出的人名和物品。没有可替换部分则拒绝编造。"""
+    """替换数字，或预先列出的人名和物品。没有可替换部分则拒绝编造。
+
+    文字变式不重复原题，彼此也不重复。词表不够时少返回几条。
+    """
     question = (question_text or "").strip()
     try:
         total = int(count)

@@ -98,6 +98,33 @@ class TestGrading(unittest.TestCase):
         self.assertEqual(result["items"][0]["stem"], "买一个香蕉。")
         self.assertIsNone(result["items"][0]["answer"])
 
+    def test_object_variants_do_not_repeat_original_or_each_other(self):
+        from backend.tools.grading import make_variants
+
+        question = "买一个苹果。"
+        result = make_variants(question, count=5)
+        again = make_variants(question, count=5)
+        self.assertEqual(result["status"], "ready")
+        stems = [item["stem"] for item in result["items"]]
+        self.assertEqual(stems, [item["stem"] for item in again["items"]])
+        self.assertGreaterEqual(len(stems), 1)
+        self.assertLess(len(stems), 5)
+        self.assertEqual(len(set(stems)), len(stems))
+        self.assertNotIn(question, stems)
+        self.assertTrue(all(item["answer"] is None for item in result["items"]))
+        self.assertEqual(stems, ["买一个香蕉。", "买一个橘子。", "买一个梨。"])
+
+        names = make_variants("小明比小红高吗？", count=5)
+        name_stems = [item["stem"] for item in names["items"]]
+        self.assertEqual(names["status"], "ready")
+        self.assertEqual(len(name_stems), 5)
+        self.assertEqual(len(set(name_stems)), len(name_stems))
+        self.assertNotIn("小明比小红高吗？", name_stems)
+        self.assertEqual(
+            name_stems[:3],
+            ["小红比小华高吗？", "小华比小李高吗？", "小李比小王高吗？"],
+        )
+
     def test_arithmetic_variant_keeps_hidden_answer(self):
         from backend.tools.grading import format_variants, make_variants
 

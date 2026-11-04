@@ -16,7 +16,6 @@ sys.path.insert(0, str(project_root))
 
 from backend.agents.react_agent import ReActStudyAgent
 from backend.llm_helper import text_content
-from backend.tools.plan_generator import create_daily_schedule, generate_milestone_checklist
 from backend.config import validate_config, LLM_MODEL, UPLOADS_DIR
 import re
 import tempfile
@@ -1220,7 +1219,7 @@ def render_planner():
 def render_daily():
     page_header("daily", chips=[
         "<b>输入</b> 主题列表",
-        "<b>输出</b> 时间块",
+        "<b>输出</b> /v1/schedules",
     ])
 
     if 'daily_schedule' not in st.session_state:
@@ -1265,7 +1264,11 @@ def render_daily():
                 st.session_state.schedule_hours = available_hours
                 st.session_state.schedule_with_break = include_break
                 st.session_state.schedule_break_duration = break_duration
-                st.session_state.daily_schedule = create_daily_schedule(topics, available_hours, include_break, break_duration)
+                from backend.api.local_client import schedule_text
+
+                st.session_state.daily_schedule = schedule_text(
+                    topics, float(available_hours), include_break, int(break_duration)
+                )
                 st.success("时间表生成成功")
             else:
                 st.warning("请输入学习内容")
@@ -1277,11 +1280,13 @@ def render_daily():
 
         if regen_clicked:
             if st.session_state.schedule_topics:
-                st.session_state.daily_schedule = create_daily_schedule(
+                from backend.api.local_client import schedule_text
+
+                st.session_state.daily_schedule = schedule_text(
                     st.session_state.schedule_topics,
-                    available_hours,
+                    float(available_hours),
                     include_break,
-                    break_duration,
+                    int(break_duration),
                 )
                 st.session_state.schedule_hours = available_hours
                 st.session_state.schedule_with_break = include_break

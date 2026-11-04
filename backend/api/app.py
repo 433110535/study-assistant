@@ -19,6 +19,17 @@ from fastapi.responses import StreamingResponse
 from backend.config import TRACE_DB_PATH
 
 
+def _break_minutes(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    minutes = int(value)
+    if minutes < 5 or minutes > 30:
+        return None
+    return minutes
+
+
 def _plan_days(value: Any) -> Optional[int]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -79,6 +90,7 @@ def create_app(
     compare_fn: Optional[Callable[..., str]] = None,
     questions_fn: Optional[Callable[..., str]] = None,
     plan_fn: Optional[Callable[..., str]] = None,
+    schedule_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -297,6 +309,28 @@ def create_app(
 
             fn = generate_study_plan
         return {"text": fn(subject, goal, days, level, hours)}
+
+    @app.post("/v1/schedules", dependencies=guard)
+    def schedules(payload: dict = Body(...)) -> dict:
+        raw_topics = payload.get("topics")
+        if not isinstance(raw_topics, list):
+            raise HTTPException(status_code=400, detail="topics 必须是非空列表")
+        topics = [str(item).strip() for item in raw_topics if str(item).strip()]
+        hours = _plan_hours(payload.get("available_hours", 2))
+        include_break = payload.get("include_break", False)
+        if not isinstance(include_break, bool):
+            raise HTTPException(status_code=400, detail="include_break 必须是布尔值")
+        break_duration = _break_minutes(payload.get("break_duration", 15))
+        if not topics:
+            raise HTTPException(status_code=400, detail="至少要有一个学习主题")
+        if hours is None or break_duration is None:
+            raise HTTPException(status_code=400, detail="可用时长须为 0.5 到 8 小时，休息须为 5 到 30 分钟")
+        fn = schedule_fn
+        if fn is None:
+            from backend.tools.plan_generator import create_daily_schedule
+
+            fn = create_daily_schedule
+        return {"text": fn(topics, hours, include_break, break_duration)}
 
     return app
 

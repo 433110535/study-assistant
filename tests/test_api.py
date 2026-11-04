@@ -429,6 +429,34 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["text"], "数学|会做题|14|初学者|1.5")
 
+    def test_schedule_route_matches_the_local_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+        from backend.tools.plan_generator import create_daily_schedule
+
+        topics = ["变量", "循环"]
+        app = create_app(self.db, api_key="secret")
+        with TestClient(app) as client:
+            empty = client.post(
+                "/v1/schedules",
+                json={"topics": ["  "]},
+                headers=self._headers(),
+            )
+            self.assertEqual(empty.status_code, 400)
+            ok = client.post(
+                "/v1/schedules",
+                json={
+                    "topics": topics,
+                    "available_hours": 2,
+                    "include_break": True,
+                    "break_duration": 15,
+                },
+                headers=self._headers(),
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["text"], create_daily_schedule(topics, 2, True, 15))
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

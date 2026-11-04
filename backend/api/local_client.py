@@ -72,6 +72,27 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def schedule_text(
+    topics: list,
+    available_hours: float = 2.0,
+    include_break: bool = False,
+    break_duration: int = 15,
+    db_path: Optional[Path] = None,
+) -> str:
+    data = request_json(
+        "POST",
+        "/v1/schedules",
+        db_path=db_path,
+        json_body={
+            "topics": topics,
+            "available_hours": available_hours,
+            "include_break": include_break,
+            "break_duration": break_duration,
+        },
+    )
+    return str(data.get("text") or "")
+
+
 def plan_text(
     subject: str,
     goal: str,

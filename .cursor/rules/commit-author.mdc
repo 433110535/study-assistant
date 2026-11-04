@@ -1,0 +1,23 @@
+---
+description: 提交只署 Dry_rain，禁止带上 Cursor 合作者
+alwaysApply: true
+---
+
+# 提交只写仓库主人
+
+每次创建或推送 Git 提交时，作者和提交者都只能是：
+
+`Dry_rain <x433110535@outlook.com>`
+
+提交说明里不得出现 `Co-authored-by`，也不得出现 Cursor 或其他助手署名。
+
+不要修改 git config。不要用 `git commit` 或 `git commit --amend` 生成最终提交：当前环境会自动追加上 `Co-authored-by: Cursor`。
+
+用下面的方式生成提交，并在推送前用 `git log -1 --format=full` 确认说明里没有合作者行：
+
+1. 只暂存本次相关文件。
+2. 把提交说明写到临时文件。
+3. 设置 `GIT_AUTHOR_NAME`、`GIT_AUTHOR_EMAIL`、`GIT_COMMITTER_NAME`、`GIT_COMMITTER_EMAIL` 为上面的身份。
+4. 用 `F:\Git\cmd\git.exe commit-tree <tree> -p <parent> -F <说明文件>` 生成提交对象。
+5. 用 `F:\Git\cmd\git.exe update-ref HEAD <新提交>` 移动分支。
+6. 用户要求推送时再推送。未推送的提交不要 force push。

@@ -1,17 +1,20 @@
 """
-本机只读和少量确认接口。默认没有 API Key 时只建议绑在 127.0.0.1。
+本机接口。默认没有 API Key 时只建议绑在 127.0.0.1。
 
-不提供流式问答，也不连接 Postgres。
+问答流式接口会调用 Agent。测试可以传入 agent_factory，避免请求模型。
+不连接 Postgres。
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Iterator, Optional
 
 from datetime import datetime
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from backend.config import TRACE_DB_PATH
 
@@ -23,9 +26,24 @@ def _parse_now(value: str):
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
+def encode_sse(event: Any) -> str:
+    """把一条 ReAct 事件写成一行 SSE。"""
+    if hasattr(event, "model_dump"):
+        data = event.model_dump(mode="json")
+    else:
+        data = dict(event)
+    return "data: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+
+
+def iter_chat_sse(agent: Any, message: str) -> Iterator[str]:
+    for event in agent.react_stream(message):
+        yield encode_sse(event)
+
+
 def create_app(
     db_path: Optional[Path] = None,
     api_key: str = "",
+    agent_factory: Optional[Callable[[], Any]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -164,6 +182,24 @@ def create_app(
 
         due = get_learning_state(user_id, db_path=database)["due"]
         return {"count": len(due), "body": format_morning_card(due)}
+
+    def new_agent() -> Any:
+        if agent_factory is not None:
+            return agent_factory()
+        from backend.agents.react_agent import ReActStudyAgent
+
+        return ReActStudyAgent(verbose=False, session_id="api")
+
+    @app.post("/v1/chat/stream", dependencies=guard)
+    def chat_stream(payload: dict = Body(...)) -> StreamingResponse:
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message 不能为空")
+        agent = new_agent()
+        return StreamingResponse(
+            iter_chat_sse(agent, message),
+            media_type="text/event-stream",
+        )
 
     return app
 

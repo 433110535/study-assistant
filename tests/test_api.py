@@ -253,6 +253,51 @@ class TestLocalApi(unittest.TestCase):
         )
         self.assertEqual(bad_quality.status_code, 400)
 
+    def test_chat_stream_uses_the_injected_agent(self):
+        import json
+
+        from backend.agents.react_models import ReActEvent, ReActEventType
+        from backend.api.app import create_app
+
+        class FakeAgent:
+            def react_stream(self, message: str):
+                yield ReActEvent(
+                    event_type=ReActEventType.ANSWER_CHUNK,
+                    content=message[:1],
+                    iteration=1,
+                )
+                yield ReActEvent(
+                    event_type=ReActEventType.FINAL_ANSWER,
+                    content=message,
+                    iteration=1,
+                )
+
+        from fastapi.testclient import TestClient
+
+        app = create_app(self.db, api_key="secret", agent_factory=FakeAgent)
+        empty = TestClient(app).post(
+            "/v1/chat/stream",
+            json={"message": "  "},
+            headers=self._headers(),
+        )
+        self.assertEqual(empty.status_code, 400)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/chat/stream",
+                json={"message": "你好"},
+                headers=self._headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        lines = [line for line in response.text.splitlines() if line.startswith("data: ")]
+        self.assertEqual(len(lines), 2)
+        first = json.loads(lines[0][len("data: "):])
+        last = json.loads(lines[1][len("data: "):])
+        self.assertEqual(first["event_type"], "answer_chunk")
+        self.assertEqual(first["content"], "你")
+        self.assertEqual(last["event_type"], "final_answer")
+        self.assertEqual(last["content"], "你好")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

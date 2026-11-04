@@ -260,6 +260,22 @@ def _restore_chat_session() -> None:
         agent.chat_history = [dict(item) for item in messages]
 
 
+def _open_saved_chat(session_id: str) -> None:
+    """切到一条已保存的问答，不删除其他会话。"""
+    from backend.platform.chat_store import load_messages
+
+    user_id = st.session_state.get("auth_user") or "student"
+    messages = load_messages(session_id)
+    st.session_state.chat_session_id = session_id
+    st.session_state.messages = messages
+    st.session_state.pop("qa_pending", None)
+    agent = st.session_state.get("agent")
+    if agent is not None:
+        agent.session_id = session_id
+        agent.user_id = user_id
+        agent.chat_history = [dict(item) for item in messages]
+
+
 def _persist_message(role: str, content: str) -> None:
     session_id = st.session_state.get("chat_session_id")
     if not session_id:
@@ -779,6 +795,24 @@ def _stream_answer(question: str):
         st.rerun()
 
 
+def _render_saved_chats() -> None:
+    from backend.platform.chat_store import list_sessions
+
+    user_id = st.session_state.get("auth_user") or "student"
+    current = st.session_state.get("chat_session_id")
+    sessions = list_sessions(user_id)
+    if len(sessions) <= 1:
+        return
+    with st.expander("历史会话", expanded=False):
+        for item in sessions:
+            title = item["title"] or "新对话"
+            label = title if item["id"] != current else f"{title} · 当前"
+            if st.button(label, key=f"open_chat_{item['id']}", use_container_width=True):
+                if item["id"] != current:
+                    _open_saved_chat(item["id"])
+                    st.rerun()
+
+
 def render_qa():
     page_header("qa", chips=[
         "<b>模式</b> ReAct · 流式",
@@ -788,6 +822,7 @@ def render_qa():
 
     agent = st.session_state.get('agent')
     kb_ready = bool(agent and getattr(agent, "_kb", None) is not None)
+    _render_saved_chats()
 
     rag_col, note_col = st.columns([1, 1.7], vertical_alignment="center")
     with rag_col:

@@ -95,6 +95,33 @@ def ensure_session(user_id: str, db_path: Optional[Path] = None) -> str:
     return start_session(user_id, db_path=db_path)
 
 
+def list_sessions(
+    user_id: str,
+    limit: int = 20,
+    db_path: Optional[Path] = None,
+) -> List[Dict[str, str]]:
+    path = Path(db_path or TRACE_DB_PATH)
+    init_chat_db(path)
+    with _connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, updated_at FROM sessions
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (user_id or "student", max(1, int(limit))),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"] or "新对话",
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
 def load_messages(session_id: str, db_path: Optional[Path] = None) -> List[Dict[str, str]]:
     path = Path(db_path or TRACE_DB_PATH)
     init_chat_db(path)

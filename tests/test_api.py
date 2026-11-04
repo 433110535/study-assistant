@@ -457,6 +457,25 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["text"], create_daily_schedule(topics, 2, True, 15))
 
+    def test_paper_grade_route_matches_the_local_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+        from backend.tools.grading import grade_paper
+
+        paper = "1. 3+4等于多少？\n作答：7\n标准答案：7"
+        app = create_app(self.db, api_key="secret")
+        with TestClient(app) as client:
+            empty = client.post("/v1/papers/grade", json={"text": "  "}, headers=self._headers())
+            self.assertEqual(empty.status_code, 400)
+            ok = client.post(
+                "/v1/papers/grade",
+                json={"text": paper},
+                headers=self._headers(),
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json(), grade_paper(paper))
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

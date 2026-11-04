@@ -72,6 +72,15 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def grade_paper_text(text: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
+    return request_json(
+        "POST",
+        "/v1/papers/grade",
+        db_path=db_path,
+        json_body={"text": text},
+    )
+
+
 def schedule_text(
     topics: list,
     available_hours: float = 2.0,

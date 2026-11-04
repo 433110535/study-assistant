@@ -1462,9 +1462,9 @@ def _grade_uploaded_paper(uploaded_file):
             recognized = str(recognized)
         if _is_vision_error(recognized):
             return "", None, recognized
-        from backend.tools.grading import grade_paper
+        from backend.api.local_client import grade_paper_text
 
-        return recognized, grade_paper(recognized), None
+        return recognized, grade_paper_text(recognized), None
     except Exception as exc:
         return "", None, f"识图失败: {exc}"
     finally:
@@ -1473,7 +1473,8 @@ def _grade_uploaded_paper(uploaded_file):
 
 def _render_paper_grade():
     """整卷文本或图片。判分本身不调用模型。"""
-    from backend.tools.grading import format_paper, grade_paper
+    from backend.api.local_client import grade_paper_text
+    from backend.tools.grading import format_paper
 
     st.markdown("**整卷逐题**")
     st.caption(
@@ -1514,7 +1515,7 @@ def _render_paper_grade():
             else:
                 st.session_state["paper_vision_error"] = ""
                 st.session_state.pop("paper_source_text", None)
-                st.session_state["paper_report"] = grade_paper(text)
+                st.session_state["paper_report"] = grade_paper_text(text)
 
     error = st.session_state.get("paper_vision_error") or ""
     if error:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 from datetime import datetime
 
@@ -91,6 +91,7 @@ def create_app(
     questions_fn: Optional[Callable[..., str]] = None,
     plan_fn: Optional[Callable[..., str]] = None,
     schedule_fn: Optional[Callable[..., str]] = None,
+    paper_fn: Optional[Callable[..., Dict[str, Any]]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -331,6 +332,18 @@ def create_app(
 
             fn = create_daily_schedule
         return {"text": fn(topics, hours, include_break, break_duration)}
+
+    @app.post("/v1/papers/grade", dependencies=guard)
+    def grade_paper_route(payload: dict = Body(...)) -> dict:
+        text = str(payload.get("text") or "")
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="text 不能为空")
+        fn = paper_fn
+        if fn is None:
+            from backend.tools.grading import grade_paper
+
+            fn = grade_paper
+        return fn(text)
 
     return app
 

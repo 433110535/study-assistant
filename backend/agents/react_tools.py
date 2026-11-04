@@ -783,6 +783,50 @@ def _sample_backoff_jitter() -> float:
     return random.uniform(0.0, _BACKOFF_JITTER_S)
 
 
+_CIRCUIT_FAILURE_LIMIT = 3
+_CIRCUIT_COOLDOWN_S = 30.0
+
+
+class _ToolCircuit:
+    """同一工具连续执行失败后，冷却期内不再调用。参数错误不计入。"""
+
+    def __init__(self, clock: Optional[Callable[[], float]] = None):
+        self.clock = clock or time.monotonic
+        self._failures: Dict[str, int] = {}
+        self._open_until: Dict[str, float] = {}
+
+    def blocked(self, name: str) -> bool:
+        until = self._open_until.get(name)
+        if until is None:
+            return False
+        if self.clock() >= until:
+            self._open_until.pop(name, None)
+            self._failures[name] = 0
+            return False
+        return True
+
+    def success(self, name: str) -> None:
+        self._failures.pop(name, None)
+        self._open_until.pop(name, None)
+
+    def failure(self, name: str) -> None:
+        count = self._failures.get(name, 0) + 1
+        self._failures[name] = count
+        if count >= _CIRCUIT_FAILURE_LIMIT:
+            self._open_until[name] = self.clock() + _CIRCUIT_COOLDOWN_S
+
+    def reset(self) -> None:
+        self._failures.clear()
+        self._open_until.clear()
+
+
+_circuit = _ToolCircuit()
+
+
+def reset_tool_circuit() -> None:
+    _circuit.reset()
+
+
 def execute_tool(
     agent,
     tool_name: str,
@@ -794,12 +838,16 @@ def execute_tool(
     """
     执行指定工具。超时或执行异常会再试 ToolSpec.retries 次。
     两次尝试之间等待 min(8, 0.5 * 2^attempt) 秒，再加 [0, 0.25) 秒抖动。
-    参数错误不重试、不等待。sleeper 与 jitter 可注入，测试不必真睡。
+    参数错误不重试、不等待，也不计入熔断。
+    同一工具连续 3 次执行失败后熔断 30 秒，冷却期内直接返回错误字符串。
+    sleeper 与 jitter 可注入，测试不必真睡。
     结果写入 trace 由 Agent 层负责。
     """
     spec = get_tool_spec(tool_name)
     if not spec:
         return f"未知工具: {tool_name}"
+    if _circuit.blocked(tool_name):
+        return f"工具 {tool_name} 连续失败，已暂时熔断，请稍后再试。"
 
     sleep = sleeper if sleeper is not None else time.sleep
     sample_jitter = jitter if jitter is not None else _sample_backoff_jitter
@@ -814,16 +862,20 @@ def execute_tool(
             try:
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(_run)
-                    return future.result(timeout=spec.timeout_s)
+                    result = future.result(timeout=spec.timeout_s)
             except FuturesTimeoutError:
                 last_error = f"工具 {tool_name} 执行超时（>{spec.timeout_s}s），请稍后重试。"
             except TypeError as e:
                 return f"工具参数错误: {str(e)}"
             except Exception as e:
                 last_error = f"工具执行失败: {str(e)}"
+            else:
+                _circuit.success(tool_name)
+                return result
 
             if attempt + 1 < attempts:
                 sleep(_backoff_seconds(attempt, sample_jitter()))
+        _circuit.failure(tool_name)
         return last_error
     finally:
         _ = time.perf_counter() - started  # 耗时由 react_agent 记录

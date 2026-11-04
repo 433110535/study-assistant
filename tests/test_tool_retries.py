@@ -21,6 +21,7 @@ class TestToolRetries(unittest.TestCase):
         self.original_fn = self.spec.fn
         self.original_retries = self.spec.retries
         self.original_timeout = self.spec.timeout_s
+        tools.reset_tool_circuit()
         # 旧用例只断言重试次数。退避落地后把真睡眠换成空等，避免套件卡住。
         self.original_sleep = tools.time.sleep
         tools.time.sleep = lambda _seconds: None
@@ -97,11 +98,13 @@ class TestToolBackoff(unittest.TestCase):
         self.original_fn = self.spec.fn
         self.original_retries = self.spec.retries
         self.original_timeout = self.spec.timeout_s
+        tools.reset_tool_circuit()
 
     def tearDown(self):
         self.spec.fn = self.original_fn
         self.spec.retries = self.original_retries
         self.spec.timeout_s = self.original_timeout
+        self.tools.reset_tool_circuit()
 
     def test_waits_exponentially_with_jitter_between_retries(self):
         calls = {"n": 0}
@@ -199,6 +202,98 @@ class TestToolBackoff(unittest.TestCase):
 
         for spec in get_all_specs():
             self.assertEqual(spec.retries, 0, spec.name)
+
+
+class TestToolCircuit(unittest.TestCase):
+    def setUp(self):
+        import backend.agents.react_tools as tools
+        from backend.agents.tool_registry import get_tool_spec
+
+        self.tools = tools
+        self.spec = get_tool_spec("hint_level")
+        self.original_fn = self.spec.fn
+        self.original_retries = self.spec.retries
+        self.now = 1_000.0
+        tools._circuit.clock = lambda: self.now
+        tools.reset_tool_circuit()
+
+    def tearDown(self):
+        self.spec.fn = self.original_fn
+        self.spec.retries = self.original_retries
+        self.tools._circuit.clock = __import__("time").monotonic
+        self.tools.reset_tool_circuit()
+
+    def test_three_failures_open_the_circuit(self):
+        calls = {"n": 0}
+
+        def down(agent, **kwargs):
+            calls["n"] += 1
+            raise RuntimeError("down")
+
+        self.spec.fn = down
+        self.spec.retries = 0
+        for _ in range(3):
+            result = self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+            self.assertIn("down", result)
+        blocked = self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.assertIn("熔断", blocked)
+        self.assertEqual(calls["n"], 3)
+
+    def test_cooldown_allows_the_next_call(self):
+        calls = {"n": 0}
+
+        def down(agent, **kwargs):
+            calls["n"] += 1
+            raise RuntimeError("down")
+
+        self.spec.fn = down
+        for _ in range(3):
+            self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.now += 30
+        again = self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.assertIn("down", again)
+        self.assertEqual(calls["n"], 4)
+
+    def test_success_clears_the_failure_count(self):
+        calls = {"n": 0}
+
+        def fail(agent, **kwargs):
+            calls["n"] += 1
+            raise RuntimeError("down")
+
+        self.spec.fn = fail
+        self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.spec.fn = lambda agent, **kwargs: "ok"
+        self.assertEqual(
+            self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None),
+            "ok",
+        )
+        self.spec.fn = fail
+        calls["n"] = 0
+        for _ in range(2):
+            self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.assertEqual(calls["n"], 2)
+        self.assertIn(
+            "down",
+            self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None),
+        )
+        blocked = self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+        self.assertIn("熔断", blocked)
+        self.assertEqual(calls["n"], 3)
+
+    def test_parameter_errors_do_not_open_the_circuit(self):
+        calls = {"n": 0}
+
+        def bad(agent, **kwargs):
+            calls["n"] += 1
+            raise TypeError("missing")
+
+        self.spec.fn = bad
+        for _ in range(4):
+            result = self.tools.execute_tool(_Agent(), "hint_level", {}, sleeper=lambda _s: None)
+            self.assertIn("工具参数错误", result)
+        self.assertEqual(calls["n"], 4)
 
 
 if __name__ == "__main__":

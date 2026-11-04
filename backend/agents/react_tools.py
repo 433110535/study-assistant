@@ -631,8 +631,9 @@ def _register_all_tools() -> None:
                 "function": {
                     "name": "make_variants",
                     "description": (
-                        "把题干里的数字换成邻近数字，生成同结构变式，不附答案。"
-                        "题干没有数字时会拒绝，这时不要自己编造同结构题。"
+                        "生成同结构变式，不附答案。有数字就换数字；"
+                        "没有数字时只换预先列出的人名或常见物品。"
+                        "两者都没有就返回 unsupported，这时不要自己编造同结构题。"
                     ),
                     "parameters": {
                         "type": "object",

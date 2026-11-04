@@ -71,6 +71,33 @@ class TestGrading(unittest.TestCase):
         self.assertEqual(result["status"], "unsupported")
         self.assertEqual(result["items"], [])
 
+    def test_text_variant_swaps_listed_names_without_a_model(self):
+        from backend.tools.grading import format_variants, make_variants
+
+        question = "小明比小红高吗？"
+        result = make_variants(question, count=3)
+        again = make_variants(question, count=3)
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(
+            [item["stem"] for item in result["items"]],
+            ["小红比小华高吗？", "小华比小李高吗？", "小李比小王高吗？"],
+        )
+        self.assertEqual(
+            [item["stem"] for item in result["items"]],
+            [item["stem"] for item in again["items"]],
+        )
+        self.assertTrue(all(item["answer"] is None for item in result["items"]))
+        text = format_variants(result)
+        self.assertIn("不附答案", text)
+        self.assertNotIn("答案:", text)
+
+    def test_text_variant_swaps_listed_objects(self):
+        from backend.tools.grading import make_variants
+
+        result = make_variants("买一个苹果。", count=1)
+        self.assertEqual(result["items"][0]["stem"], "买一个香蕉。")
+        self.assertIsNone(result["items"][0]["answer"])
+
     def test_arithmetic_variant_keeps_hidden_answer(self):
         from backend.tools.grading import format_variants, make_variants
 

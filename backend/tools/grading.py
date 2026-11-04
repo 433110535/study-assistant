@@ -2,7 +2,7 @@
 对照标准答案判分、错因归类、同结构变式。
 
 不调用大模型。没有标准答案时返回 ungraded，不编造分数。
-变式只替换题干里的数字；没有数字时明确说做不到。
+变式替换题干里的数字，或预先列出的人名和常见物品。没有可替换的部分就拒绝，不调用模型。
 """
 from __future__ import annotations
 
@@ -18,6 +18,12 @@ ERROR_READING = "审题错误"
 ERROR_OTHER = "其他"
 
 _NUM_RE = re.compile(r"(?<![0-9.])(-?\d+(?:\.\d+)?)(?![0-9.])")
+_NAMES = ("小明", "小红", "小华", "小李", "小王", "小张")
+_OBJECTS = ("苹果", "香蕉", "橘子", "梨")
+_SURFACE_GROUPS = (_NAMES, _OBJECTS)
+_SURFACE_WORDS = tuple(
+    sorted((word for group in _SURFACE_GROUPS for word in group), key=len, reverse=True)
+)
 _FACTORS = (2.0, 0.5, 10.0, 0.1, 100.0, 0.01)
 _ARITH_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow, ast.USub, ast.UAdd)
 
@@ -235,8 +241,54 @@ def _shift_number(raw: str, salt: int) -> str:
     return str(int(updated)) if float(updated).is_integer() else str(updated)
 
 
+def _surface_spans(question: str) -> List[tuple]:
+    """从左到右找出不重叠的人名或物品。先匹配更长的词。"""
+    spans = []
+    index = 0
+    while index < len(question):
+        matched = None
+        for word in _SURFACE_WORDS:
+            if question.startswith(word, index):
+                matched = (index, index + len(word), word)
+                break
+        if matched is None:
+            index += 1
+            continue
+        spans.append(matched)
+        index = matched[1]
+    return spans
+
+
+def _rotate_surface(word: str, steps: int) -> str:
+    for group in _SURFACE_GROUPS:
+        if word in group:
+            return group[(group.index(word) + steps) % len(group)]
+    return word
+
+
+def _swap_surface(question: str, count: int) -> Dict[str, Any]:
+    spans = _surface_spans(question)
+    if not spans:
+        return {
+            "status": "unsupported",
+            "items": [],
+            "reason": "题干里没有可替换的数字、人名或常见物品，不能生成同结构变式",
+        }
+    items = []
+    for index in range(count):
+        pieces = []
+        cursor = 0
+        for start, end, word in spans:
+            pieces.append(question[cursor:start])
+            pieces.append(_rotate_surface(word, index + 1))
+            cursor = end
+        pieces.append(question[cursor:])
+        items.append({"stem": "".join(pieces), "answer": None})
+    return {"status": "ready", "items": items, "reason": ""}
+
+
 def make_variants(question_text: str, count: int = 3) -> Dict[str, Any]:
-    """替换题干中的数字，生成同结构变式。没有数字则拒绝编造。"""
+    """替换数字，或预先列出的人名和物品。没有可替换部分则拒绝编造。"""
     question = (question_text or "").strip()
     try:
         total = int(count)
@@ -245,11 +297,13 @@ def make_variants(question_text: str, count: int = 3) -> Dict[str, Any]:
     total = min(5, max(1, total))
     matches = list(_NUM_RE.finditer(question))
     if not question or not matches:
-        return {
-            "status": "unsupported",
-            "items": [],
-            "reason": "题干里没有可替换的数字，不能生成同结构变式",
-        }
+        if not question:
+            return {
+                "status": "unsupported",
+                "items": [],
+                "reason": "题干里没有可替换的数字、人名或常见物品，不能生成同结构变式",
+            }
+        return _swap_surface(question, total)
 
     digest = hashlib.sha256(question.encode("utf-8")).digest()
     items = []

@@ -82,6 +82,98 @@ class TestEvalRunner(unittest.TestCase):
             ],
         )
 
+    def test_failure_board_reads_latest_run(self):
+        import json
+
+        from backend.platform.eval_runner import load_failure_board, save_eval_run
+
+        db = Path(tempfile.mkdtemp()) / "app.db"
+        dataset = {"name": "tiny", "version": "v0", "samples": [{"id": "a"}]}
+        save_eval_run(
+            dataset,
+            "dry-run",
+            [
+                {
+                    "sample_id": "a",
+                    "passed": False,
+                    "tools_used": [],
+                    "detail": json.dumps({"missing": ["rag_search"]}),
+                    "output": "",
+                },
+                {
+                    "sample_id": "b",
+                    "passed": True,
+                    "tools_used": ["explain_concept"],
+                    "detail": "ok",
+                    "output": "",
+                },
+                {
+                    "sample_id": "c",
+                    "passed": False,
+                    "tools_used": [],
+                    "detail": "timeout",
+                    "output": "",
+                },
+            ],
+            db_path=db,
+        )
+        board = load_failure_board(db)
+        latest = board["latest"]
+        self.assertEqual(
+            latest["failure_attribution"],
+            [
+                {"tool": "other", "count": 1},
+                {"tool": "rag_search", "count": 1},
+            ],
+        )
+        self.assertEqual(
+            [(item["sample_id"], item["missing"]) for item in latest["failed_samples"]],
+            [("a", ["rag_search"]), ("c", [])],
+        )
+        self.assertFalse(latest["gate"]["passed"])
+        self.assertIsNone(latest["faithfulness"])
+        self.assertEqual(board["earlier"], [])
+
+    def test_failure_board_recomputes_old_summary(self):
+        import json
+        import sqlite3
+
+        from backend.platform.eval_runner import load_failure_board, save_eval_run
+
+        db = Path(tempfile.mkdtemp()) / "app.db"
+        dataset = {"name": "tiny", "version": "v0", "samples": [{"id": "a"}]}
+        save_eval_run(
+            dataset,
+            "live",
+            [
+                {
+                    "sample_id": "a",
+                    "passed": False,
+                    "tools_used": [],
+                    "detail": json.dumps({"missing": ["read_image"]}),
+                    "output": "",
+                }
+            ],
+            db_path=db,
+        )
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE eval_runs SET summary_json = ?",
+                (json.dumps({"passed": 0, "total": 1, "accuracy": 0}),),
+            )
+        board = load_failure_board(db)
+        self.assertEqual(
+            board["latest"]["failure_attribution"],
+            [{"tool": "read_image", "count": 1}],
+        )
+
+    def test_failure_board_is_empty_without_runs(self):
+        from backend.platform.eval_runner import load_failure_board
+
+        board = load_failure_board(Path(tempfile.mkdtemp()) / "missing.db")
+        self.assertIsNone(board["latest"])
+        self.assertEqual(board["earlier"], [])
+
     def test_ungrounded_sentence_fails_the_faithfulness_gate(self):
         from backend.platform.eval_runner import check_release_gate, dry_run, mean_faithfulness
 

@@ -123,6 +123,7 @@ PAGES = [
     ("kb", "09", "KNOWLEDGE BASE", "向量知识库", "RAG 检索"),
     ("mistakes", "10", "MISTAKES", "错题本", "确认后进入复习"),
     ("code", "11", "CODE", "代码助教", "沙箱运行与分级提示"),
+    ("eval", "12", "EVAL", "失败归因", "评测缺失工具"),
 ]
 PAGE_META = {page[0]: page[1:] for page in PAGES}
 
@@ -480,7 +481,7 @@ def render_sidebar():
             # 缺 Key 时模型功能不可用，但整卷离线判分不依赖模型，页面要继续渲染。
 
         st.markdown(
-            '<div class="rail-label"><span>Workspace</span><span>11 modules</span></div>',
+            f'<div class="rail-label"><span>Workspace</span><span>{len(PAGES)} modules</span></div>',
             unsafe_allow_html=True,
         )
 
@@ -2397,6 +2398,110 @@ def render_react_visualization():
     )
 
 
+def render_eval_board():
+    """展示最近一次评测里按缺失工具归类的失败。不重新跑评测。"""
+    from backend.platform.eval_runner import load_failure_board
+
+    page_header("eval", chips=[
+        "<b>来源</b> eval_runs",
+        "<b>归因</b> 缺失工具",
+        "<b>门禁</b> 只读展示",
+    ])
+    board = load_failure_board()
+    latest = board["latest"]
+    if latest is None:
+        empty_state(
+            "NO EVAL",
+            "还没有评测记录",
+            "运行 python -m backend.platform.eval_runner --dry-run 之后，"
+            "这里会列出最近一次没通过的样本，并按缺失工具计数。",
+        )
+        return
+
+    faith = latest["faithfulness"]
+    faith_text = "不适用" if faith is None else f"{faith:.2%}"
+    gate = latest["gate"]
+    gate_text = "通过" if gate["passed"] else "未通过"
+    dataset = html.escape(f"{latest['dataset_name']}@{latest['dataset_version']}")
+    stats = [
+        ("通过题数", "Passed", f"{latest['passed_count']}/{latest['sample_count']}"),
+        ("工具选择", "Accuracy", f"{latest['accuracy']:.2%}"),
+        ("忠实度", "Faithfulness", faith_text),
+        ("门禁", "Gate", gate_text),
+    ]
+    st.markdown(
+        '<div class="stat-strip">' + "".join(
+            f'<div class="stat"><div class="stat-k"><i></i>{label}</div>'
+            f'<div class="stat-v">{html.escape(value)}</div>'
+            f'<div class="stat-note">{en}</div></div>'
+            for label, en, value in stats
+        ) + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="note-line"><span class="dot"></span>'
+        f'{dataset} · {html.escape(str(latest["mode"]))} · '
+        f'{html.escape(str(latest["started_at"]))}</div>',
+        unsafe_allow_html=True,
+    )
+    if gate["reasons"]:
+        reasons = "；".join(html.escape(str(reason)) for reason in gate["reasons"])
+        st.markdown(
+            f'<div class="note-line"><span class="dot is-off"></span>{reasons}</div>',
+            unsafe_allow_html=True,
+        )
+
+    section_head("01", "缺失工具", "MISSING TOOLS")
+    attribution = latest["failure_attribution"]
+    if attribution:
+        top = max(item["count"] for item in attribution) or 1
+        rows = "".join(
+            f'<div class="dist-row"><div class="dist-label">{html.escape(item["tool"])}</div>'
+            f'<div class="dist-track"><div class="dist-fill" style="width:{int(round(item["count"] * 100 / top))}%"></div></div>'
+            f'<div class="dist-val">{int(item["count"])}</div></div>'
+            for item in attribution
+        )
+        st.markdown(f'<div class="dist">{rows}</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="note-line"><span class="dot is-muted"></span>'
+            '只统计没通过的样本。一条失败可以计入多个缺失工具；'
+            'detail 里没有缺失列表时记为 other。检索为空、超时和成本还不在这张表里。</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        empty_state(
+            "CLEAR",
+            "这次没有失败样本",
+            "缺失工具计数为空。上面的通过题数和门禁仍是这一次运行的结果。",
+        )
+
+    section_head("02", "失败样本", "FAILED SAMPLES")
+    failed = latest["failed_samples"]
+    if failed:
+        body = "".join(
+            f'<div class="sum-row"><span class="k">{html.escape(item["sample_id"])}</span>'
+            f'<span class="v">{html.escape("、".join(item["missing"]) or "other")}</span></div>'
+            for item in failed
+        )
+        st.markdown(f'<div class="sum-list">{body}</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="note-line"><span class="dot"></span>没有失败样本。</div>',
+            unsafe_allow_html=True,
+        )
+
+    earlier = board["earlier"]
+    if earlier:
+        section_head("03", "更早的运行", "EARLIER RUNS")
+        body = "".join(
+            f'<div class="sum-row"><span class="k">'
+            f'{html.escape(item["dataset_version"])} · {html.escape(str(item["mode"]))}'
+            f'</span><span class="v">{item["accuracy"]:.2%}</span></div>'
+            for item in earlier
+        )
+        st.markdown(f'<div class="sum-list">{body}</div>', unsafe_allow_html=True)
+
+
 def render_mobile_nav():
     """移动端页面导航（桌面端隐藏，侧栏不可用时仍可切换页面）"""
     labels = [p[3] for p in PAGES]
@@ -2466,6 +2571,8 @@ def main():
             render_code_tutor()
         elif page == 'react_viz':
             render_react_visualization()
+        elif page == 'eval':
+            render_eval_board()
 
 
 if __name__ == "__main__":

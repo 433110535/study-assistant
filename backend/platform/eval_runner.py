@@ -248,6 +248,119 @@ def attribute_failures(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{"tool": name, "count": count} for name, count in ranked]
 
 
+def load_failure_board(
+    db_path: Optional[Path] = None,
+    history: int = 8,
+) -> Dict[str, Any]:
+    """读取最近几次评测。最新一次带失败样本；没有记录时 latest 为 None。
+
+    summary 里已有 failure_attribution 就直接用。旧记录没有这个字段时，
+    按失败样本的 detail 重新计数。
+    """
+    path = Path(db_path or TRACE_DB_PATH)
+    ensure_eval_tables(path)
+    limit = max(1, int(history))
+    with _connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, dataset_name, dataset_version, mode, sample_count,
+                   passed, summary_json, started_at, finished_at
+            FROM eval_runs
+            ORDER BY started_at DESC, rowid DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        if not rows:
+            return {"latest": None, "earlier": []}
+        failed_rows = conn.execute(
+            """
+            SELECT sample_id, detail
+            FROM eval_results
+            WHERE eval_run_id = ? AND passed = 0
+            ORDER BY id ASC
+            """,
+            (rows[0]["id"],),
+        ).fetchall()
+    latest = _board_run(rows[0], failed_rows)
+    earlier = [_board_run(row, []) for row in rows[1:]]
+    for item in earlier:
+        item["failed_samples"] = []
+    return {"latest": latest, "earlier": earlier}
+
+
+def _board_run(row: Any, failed_rows: List[Any]) -> Dict[str, Any]:
+    summary = _load_summary(row["summary_json"])
+    failed_samples = [
+        {
+            "sample_id": str(item["sample_id"]),
+            "missing": _missing_tools(item["detail"]),
+        }
+        for item in failed_rows
+    ]
+    attribution = _stored_attribution(summary)
+    if attribution is None:
+        attribution = attribute_failures(
+            [{"passed": False, "detail": item["detail"]} for item in failed_rows]
+        )
+    sample_count = int(row["sample_count"] or 0)
+    passed_count = int(row["passed"] or 0)
+    accuracy = summary.get("accuracy")
+    if not isinstance(accuracy, (int, float)):
+        accuracy = (passed_count / sample_count) if sample_count else 0.0
+    faithfulness = summary.get("faithfulness")
+    if faithfulness is not None and not isinstance(faithfulness, (int, float)):
+        faithfulness = None
+    return {
+        "id": row["id"],
+        "dataset_name": row["dataset_name"] or "",
+        "dataset_version": row["dataset_version"] or "",
+        "mode": row["mode"] or "",
+        "sample_count": sample_count,
+        "passed_count": passed_count,
+        "accuracy": float(accuracy),
+        "faithfulness": None if faithfulness is None else float(faithfulness),
+        "failure_attribution": attribution,
+        "failed_samples": failed_samples,
+        "started_at": row["started_at"] or "",
+        "finished_at": row["finished_at"] or "",
+        "gate": check_release_gate(
+            float(accuracy),
+            faithfulness=None if faithfulness is None else float(faithfulness),
+        ),
+    }
+
+
+def _load_summary(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _stored_attribution(summary: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    if "failure_attribution" not in summary:
+        return None
+    stored = summary.get("failure_attribution")
+    if not isinstance(stored, list):
+        return None
+    cleaned = []
+    for item in stored:
+        if not isinstance(item, dict) or "tool" not in item or "count" not in item:
+            return None
+        try:
+            count = int(item["count"])
+        except (TypeError, ValueError):
+            return None
+        cleaned.append({"tool": str(item["tool"]), "count": count})
+    return cleaned
+
+
 def _missing_tools(detail: Any) -> List[str]:
     parsed = detail
     if isinstance(detail, str):

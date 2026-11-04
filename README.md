@@ -63,12 +63,13 @@
 - **主动复习**：页面外每天北京时间 8:00 生成卡片。未配置飞书和 SMTP 时只写本地发件箱。配齐 `SMTP_HOST`、`SMTP_FROM`、`REVIEW_EMAIL_TO` 后发邮件。`python -m backend.workers.review_reply --text 推到晚上` 可改期；`--serve` 只听 127.0.0.1，不是飞书回调。
 - **评测基线**：默认集 `eval/datasets/qa_baseline_v5.json` 共 100 条（v1–v4 仍保留）。`python -m backend.platform.eval_runner --dry-run` 不调用模型，会打工具选择，并对 16 条检索题用固定片段打忠实度。`--live` 才调用模型，目前只打工具选择。传入的忠实度低于 0.85 会拦截。
 - **失败归因**：侧栏「失败归因」读取最近一次 `eval_runs`，按缺失工具列出失败样本。没有评测记录时页面只提示去跑 `--dry-run`。检索为空、超时和成本还不在这张表里。
+- **本机 API**：`python -m backend.api` 在 `127.0.0.1:8000` 提供工具列表、trace、错题确认和复习卡片。配置 `STUDY_API_KEY` 后，`/v1` 要求 `X-API-Key`。页面仍直接读 SQLite。`copy_database` 可备份并恢复这个库。
 
 ### 规划中
 
 - 拍照批改的真实试卷验收，以及真实飞书 webhook 验收
 - 代码助教的容器隔离（64MB 内存上限已有）
-- 数据中台服务化（失败归因页已有，FastAPI 未做）
+- 页面改走 API，以及 Postgres / MinIO。本机 FastAPI 和 SQLite 备份已有
 
 ---
 
@@ -221,7 +222,7 @@ study-assistant/
 | P2 | 错题本 + 拍照批改闭环 | 对照判分和整卷拆题已有，真实试卷未验收 |
 | P3 | 代码执行助教 | 本机沙箱有超时和 64MB 内存上限，无容器 |
 | P4 | 主动复习与推送 | 每日调度、本地发件箱和可选 SMTP 已有，真实飞书未验收 |
-| P5 | 评测 runner、门禁、失败归因页、FastAPI 服务化 | runner、门禁和失败归因页已有，服务化未做 |
+| P5 | 评测 runner、门禁、失败归因页、FastAPI 服务化 | 本机 API 和 SQLite 备份已有，页面仍直连数据库 |
 
 ---
 

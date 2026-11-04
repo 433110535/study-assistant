@@ -69,6 +69,29 @@ def _ensure_run_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE runs ADD COLUMN cost_yuan REAL")
 
 
+def get_trace(trace_id: str, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """按 trace_id 取一次运行和它的工具调用。没有记录时返回 None。"""
+    path = Path(db_path or TRACE_DB_PATH)
+    init_trace_db(path)
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM runs WHERE trace_id = ?",
+            (trace_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        calls = conn.execute(
+            """
+            SELECT id, tool_name, args_json, result_preview, status, latency_ms, created_at
+            FROM tool_calls
+            WHERE run_id = ?
+            ORDER BY id ASC
+            """,
+            (row["id"],),
+        ).fetchall()
+    return {"run": dict(row), "tool_calls": [dict(item) for item in calls]}
+
+
 def get_run(run_id: str, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     path = Path(db_path or TRACE_DB_PATH)
     init_trace_db(path)

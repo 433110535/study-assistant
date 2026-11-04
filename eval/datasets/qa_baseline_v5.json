@@ -1,0 +1,1072 @@
+{
+  "name": "qa_baseline",
+  "version": "v5",
+  "task_type": "tool_selection_and_faithfulness",
+  "description": "固定问答集 v5：保留 v4 的 56 条，并按工具缺口新增 44 条。检索题带固定片段，供离线忠实度使用。",
+  "changelog": "不修改 v4。新增 44 条：复习工具 11、偏少工具 16、检索 6、讲解出题计划识图与直接回答 11。",
+  "samples": [
+    {
+      "id": "q001",
+      "input": "你好，你是谁？",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q002",
+      "input": "今天心情不好，说一句鼓励我的话。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q003",
+      "input": "用一句话说明什么是学习。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q004",
+      "input": "1+1 等于几？",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q005",
+      "input": "把下面这句话翻译成英文：我正在复习线性代数。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q006",
+      "input": "请详细讲解梯度下降，面向初学者。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q007",
+      "input": "什么是反向传播？请按概念讲解，并给一个生活类比。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q008",
+      "input": "解释一下什么是特征向量，学科是线性代数。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q009",
+      "input": "给我讲讲过拟合，水平是中级。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q010",
+      "input": "请讲解正则化在机器学习里的含义。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q011",
+      "input": "我想在 14 天内入门 Python，目标是能写小脚本，帮我做学习计划。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q012",
+      "input": "帮我制定 30 天线性代数复习计划，目标是通过期末考试。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q013",
+      "input": "我是初学者，想用 21 天搞懂概率论基础，请生成学习计划。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q014",
+      "input": "为英语阅读制定一个 10 天计划，目标是每天读懂一篇短文。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q015",
+      "input": "请给数据结构生成 7 天冲刺计划，当前水平中级，目标是面试手写链表和树。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q016",
+      "input": "出 3 道关于牛顿第二定律的中等难度练习题，要有答案和解析。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q017",
+      "input": "围绕 Python 列表和元组出 2 道简单练习题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q018",
+      "input": "请生成 4 道微积分极限的困难题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q019",
+      "input": "我想巩固 SQL 的 JOIN，出几道练习题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q020",
+      "input": "给二元一次函数出 3 道中等题并附解析。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q021",
+      "input": "请从我上传的教材里查找贝叶斯定理的相关段落。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "贝叶斯定理把后验概率写成先验概率与似然的乘积，再除以证据。证据是在当前数据下各种可能假设的总概率。"
+      ],
+      "answer": "贝叶斯定理把后验概率写成先验概率与似然的乘积，再除以证据。证据是在当前数据下各种可能假设的总概率。"
+    },
+    {
+      "id": "q022",
+      "input": "知识库里有没有关于注意力机制的内容？检索一下再回答。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "注意力机制让模型在生成每个词时，对输入的不同位置分配不同的权重。权重越高，该位置对当前输出的影响越大。"
+      ],
+      "answer": "注意力机制让模型在生成每个词时，对输入的不同位置分配不同的权重。权重越高，该位置对当前输出的影响越大。"
+    },
+    {
+      "id": "q023",
+      "input": "根据已上传的 PDF，总结第 3 章对损失函数的定义。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "损失函数衡量模型预测与真实标签之间的差距。训练的目标是把这个差距变小。"
+      ],
+      "answer": "损失函数衡量模型预测与真实标签之间的差距。训练的目标是把这个差距变小。"
+    },
+    {
+      "id": "q024",
+      "input": "在我的资料中搜索「卷积」并引用原文。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "卷积用一个小的滤波器在输入上滑动，把局部区域的数值加权求和。滑动得到的新网格保留了局部图案。"
+      ],
+      "answer": "卷积用一个小的滤波器在输入上滑动，把局部区域的数值加权求和。滑动得到的新网格保留了局部图案。"
+    },
+    {
+      "id": "q025",
+      "input": "教材里怎么解释偏差和方差？请先检索知识库。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "偏差是模型预测相对真实规律的系统性偏移。方差是模型对训练样本波动的敏感程度。"
+      ],
+      "answer": "偏差是模型预测相对真实规律的系统性偏移。方差是模型对训练样本波动的敏感程度。"
+    },
+    {
+      "id": "q026",
+      "input": "先检索知识库里关于链式法则的内容，再给我做一个概念讲解。",
+      "expected_tools": [
+        "rag_search",
+        "explain_concept"
+      ],
+      "tags": [
+        "rag",
+        "explain"
+      ],
+      "contexts": [
+        "链式法则要求对复合函数先对外层求导，再乘以内层函数的导数。内层函数本身也可以再按同一法则展开。"
+      ],
+      "answer": "链式法则要求对复合函数先对外层求导，再乘以内层函数的导数。内层函数本身也可以再按同一法则展开。"
+    },
+    {
+      "id": "q027",
+      "input": "查一下资料中的矩阵乘法，然后出 2 道相关练习题。",
+      "expected_tools": [
+        "rag_search",
+        "generate_questions"
+      ],
+      "tags": [
+        "rag",
+        "quiz"
+      ],
+      "contexts": [
+        "矩阵乘法要求左矩阵的列数等于右矩阵的行数。结果里每个元素是对应行与列的点积。"
+      ],
+      "answer": "矩阵乘法要求左矩阵的列数等于右矩阵的行数。结果里每个元素是对应行与列的点积。"
+    },
+    {
+      "id": "q028",
+      "input": "用户上传了题目图片。请先识别。\n[题目图片路径] data/uploads/sample.png",
+      "expected_tools": [
+        "read_image"
+      ],
+      "tags": [
+        "vision"
+      ]
+    },
+    {
+      "id": "q029",
+      "input": "这张作业照片里的题怎么做？先读图。\n[题目图片路径] data/uploads/homework.jpg",
+      "expected_tools": [
+        "read_image"
+      ],
+      "tags": [
+        "vision"
+      ]
+    },
+    {
+      "id": "q030",
+      "input": "请识别图片中的公式后再对照教材讲解。\n[题目图片路径] data/uploads/formula.png",
+      "expected_tools": [
+        "read_image",
+        "rag_search"
+      ],
+      "tags": [
+        "vision",
+        "rag"
+      ],
+      "contexts": [
+        "公式识别之后应回到教材中的对应定义。讲解时用原文里的符号解释每一步。"
+      ],
+      "answer": "公式识别之后应回到教材中的对应定义。讲解时用原文里的符号解释每一步。"
+    },
+    {
+      "id": "q031",
+      "input": "我不需要计划，只要告诉我今天该不该喝水。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q032",
+      "input": "用类比解释什么是递归，不要出题。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q033",
+      "input": "帮我做一份 5 天的高数积分复习计划，目标是会算不定积分。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q034",
+      "input": "出 1 道关于哈希表冲突的简单题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q035",
+      "input": "我的笔记里有没有提到学习率调度？请检索。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "学习率调度会在训练过程中按预定规则改变步长。它不是一直使用同一个学习率。"
+      ],
+      "answer": "学习率调度会在训练过程中按预定规则改变步长。它不是一直使用同一个学习率。"
+    },
+    {
+      "id": "q036",
+      "input": "图片路径是 data/uploads/q36.png，请只识别题干，先不要解答。",
+      "expected_tools": [
+        "read_image"
+      ],
+      "tags": [
+        "vision"
+      ]
+    },
+    {
+      "id": "q037",
+      "input": "讲解完正态分布后，再出 2 道简单练习。",
+      "expected_tools": [
+        "explain_concept",
+        "generate_questions"
+      ],
+      "tags": [
+        "explain",
+        "quiz"
+      ]
+    },
+    {
+      "id": "q038",
+      "input": "根据知识库内容，为「支持向量机」做一份 14 天学习计划，目标是能解释间隔最大化。",
+      "expected_tools": [
+        "rag_search",
+        "generate_study_plan"
+      ],
+      "tags": [
+        "rag",
+        "plan"
+      ],
+      "contexts": [
+        "支持向量机通过最大化类别之间的间隔来确定分离超平面。间隔越大，对新样本的分离通常越稳。"
+      ],
+      "answer": "支持向量机通过最大化类别之间的间隔来确定分离超平面。间隔越大，对新样本的分离通常越稳。"
+    },
+    {
+      "id": "q039",
+      "input": "谢谢，本次对话到这里就可以。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q040",
+      "input": "请确认：如果消息里有题目图片路径，你的第一步应该做什么？现在路径是 data/uploads/q40.png。",
+      "expected_tools": [
+        "read_image"
+      ],
+      "tags": [
+        "vision"
+      ]
+    },
+    {
+      "id": "q041",
+      "input": "请在沙箱里运行这段代码，并告诉我输出：\nprint(sum([1, 2, 3]))",
+      "expected_tools": [
+        "run_code"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q042",
+      "input": "请用下面的测试检查函数，不要直接改写答案。\ndef add(a, b):\n    return a + b\nassert add(1, 2) == 3",
+      "expected_tools": [
+        "run_tests"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q043",
+      "input": "代码运行报错如下，请解释这个 traceback，先不要给改正代码：\nZeroDivisionError: division by zero",
+      "expected_tools": [
+        "explain_traceback"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q044",
+      "input": "学生代码测试没通过。请只给第 1 级提示，不要贴出正确代码。",
+      "expected_tools": [
+        "hint_level"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q045",
+      "input": "运行下面代码，如果出错就解释报错，不要直接改：\nx = 1 / 0",
+      "expected_tools": [
+        "run_code",
+        "explain_traceback"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q046",
+      "input": "先跑测试。失败的话按第 2 级提示，不要给完整答案。\ndef inc(n):\n    return n\nassert inc(1) == 2",
+      "expected_tools": [
+        "run_tests",
+        "hint_level"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q047",
+      "input": "不要运行代码，只用一句话告诉我 Python 里的 print 是做什么的。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q048",
+      "input": "帮我在沙箱里执行这段循环，并回报输出：\nfor i in range(3):\n    print(i)",
+      "expected_tools": [
+        "run_code"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q049",
+      "input": "下面是运行结果。请解释错误并给第 1 级提示，不要给改正后的函数。\n状态: failed\n异常: NameError\n信息: name x is not defined",
+      "expected_tools": [
+        "explain_traceback",
+        "hint_level"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q050",
+      "input": "请只运行测试，不要讲解概念：\ndef mul(a, b):\n    return a * b\nassert mul(2, 3) == 6",
+      "expected_tools": [
+        "run_tests"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q051",
+      "input": "题干：2+2。学生答案：5。标准答案：4。请只判对错，不要讲解。",
+      "expected_tools": [
+        "grade_item"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q052",
+      "input": "已经知道这题答错了。题干：2+2，学生答案：5，标准答案：4。请归类错因，不要重新出题。",
+      "expected_tools": [
+        "diagnose_error"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q053",
+      "input": "请对照标准答案判分，如果错了再说明错因。题干：质量为 2kg 的物体受 4N 的力，加速度是多少？学生答案：4。标准答案：2。",
+      "expected_tools": [
+        "grade_item",
+        "diagnose_error"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q054",
+      "input": "请把这道题出 3 道只改数字的变式，不要附答案：小明有 3 个苹果，又买了 5 个，一共几个？",
+      "expected_tools": [
+        "make_variants"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q055",
+      "input": "学生说 2+2 的答案是 4，但是没有标准答案。请不要假装已经判分。",
+      "expected_tools": [
+        "grade_item"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q056",
+      "input": "判分并归类错因。若答错，出 3 道变式，并把这题记入错题本。题干：3*4。学生答案：11。标准答案：12。学科数学，考点乘法。",
+      "expected_tools": [
+        "grade_item",
+        "diagnose_error",
+        "make_variants",
+        "save_mistake"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q057",
+      "input": "今天有哪些已确认的错题到了复习时间？",
+      "expected_tools": [
+        "get_learning_state"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q058",
+      "input": "先看看我的到期复习，先不要生成卡片。",
+      "expected_tools": [
+        "get_learning_state"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q059",
+      "input": "复习队列里现在到期的是哪几道？",
+      "expected_tools": [
+        "get_learning_state"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q060",
+      "input": "根据到期错题生成一张晨间复习卡片，先不要发送。",
+      "expected_tools": [
+        "plan_review"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q061",
+      "input": "把今天要复习的内容排成一张卡片，不要外发。",
+      "expected_tools": [
+        "plan_review"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q062",
+      "input": "请做一份今天的复习卡片，只列题目，不给答案。",
+      "expected_tools": [
+        "plan_review"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q063",
+      "input": "请把今天的晨间复习卡片发给我。",
+      "expected_tools": [
+        "send_message"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q064",
+      "input": "我明确要求推送今天的复习提醒。",
+      "expected_tools": [
+        "send_message"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q065",
+      "input": "这些到期的题推到晚上再复习。",
+      "expected_tools": [
+        "reschedule"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q066",
+      "input": "请把今天的复习改到晚上。",
+      "expected_tools": [
+        "reschedule"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q067",
+      "input": "用户说推到晚上，请帮我改期。",
+      "expected_tools": [
+        "reschedule"
+      ],
+      "tags": [
+        "review"
+      ]
+    },
+    {
+      "id": "q068",
+      "input": "这道链式法则我写错了，记入错题本。",
+      "expected_tools": [
+        "save_mistake"
+      ],
+      "tags": [
+        "mistake"
+      ]
+    },
+    {
+      "id": "q069",
+      "input": "请把这道牛顿第二定律加入错题本。",
+      "expected_tools": [
+        "save_mistake"
+      ],
+      "tags": [
+        "mistake"
+      ]
+    },
+    {
+      "id": "q070",
+      "input": "把「求 12 的平方」出两道只改数字的变式，不要附答案。",
+      "expected_tools": [
+        "make_variants"
+      ],
+      "tags": [
+        "variant"
+      ]
+    },
+    {
+      "id": "q071",
+      "input": "原题是 3 个苹果共 6 元，请生成同结构变式。",
+      "expected_tools": [
+        "make_variants"
+      ],
+      "tags": [
+        "variant"
+      ]
+    },
+    {
+      "id": "q072",
+      "input": "标准答案是 4，我写成了 5。题干是 2+2。请归类错因。",
+      "expected_tools": [
+        "diagnose_error"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q073",
+      "input": "已经判错。题干是求极限，我抄错了定义。请只做错因归类。",
+      "expected_tools": [
+        "diagnose_error"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q074",
+      "input": "运行失败了，请把这段报错说成人话：ZeroDivisionError: division by zero。不要给改正代码。",
+      "expected_tools": [
+        "explain_traceback"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q075",
+      "input": "请解释这个 Traceback，不要给改正后的代码：NameError: name 'x' is not defined。",
+      "expected_tools": [
+        "explain_traceback"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q076",
+      "input": "先给第 1 级提示。报错是 IndexError: list index out of range。",
+      "expected_tools": [
+        "hint_level"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q077",
+      "input": "再提示一点，用第 2 级。AssertionError 出现在第 4 行。",
+      "expected_tools": [
+        "hint_level"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q078",
+      "input": "题干：3 的平方是多少？我的答案是 9，标准答案是 9。请判分。",
+      "expected_tools": [
+        "grade_item"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q079",
+      "input": "题干：圆的面积公式。我写了 2πr，标准答案是 πr^2。请对照标准答案判对错。",
+      "expected_tools": [
+        "grade_item"
+      ],
+      "tags": [
+        "grade"
+      ]
+    },
+    {
+      "id": "q080",
+      "input": "请在沙箱里运行这段代码：print(1 + 2)",
+      "expected_tools": [
+        "run_code"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q081",
+      "input": "帮我运行下面的 Python，看输出：\nfor i in range(2):\n    print(i)",
+      "expected_tools": [
+        "run_code"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q082",
+      "input": "用测试跑我的函数。代码：def add(a, b): return a + b。测试：assert add(1, 2) == 3。",
+      "expected_tools": [
+        "run_tests"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q083",
+      "input": "请用测试判断对错。代码：def negate(x): return -x。测试：assert negate(3) == -3。",
+      "expected_tools": [
+        "run_tests"
+      ],
+      "tags": [
+        "code"
+      ]
+    },
+    {
+      "id": "q084",
+      "input": "请从我上传的教材里查找正则化的相关段落。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "正则化在损失函数上增加一项，用来惩罚过大的参数。常见的惩罚是参数绝对值之和或平方和。"
+      ],
+      "answer": "正则化在损失函数上增加一项，用来惩罚过大的参数。常见的惩罚是参数绝对值之和或平方和。"
+    },
+    {
+      "id": "q085",
+      "input": "知识库里有没有关于梯度消失的内容？检索一下再回答。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "梯度消失是指反向传播时梯度逐层变小，前面的层几乎学不到东西。深层网络使用饱和激活函数时更容易出现。"
+      ],
+      "answer": "梯度消失是指反向传播时梯度逐层变小，前面的层几乎学不到东西。深层网络使用饱和激活函数时更容易出现。"
+    },
+    {
+      "id": "q086",
+      "input": "根据已上传的 PDF，总结资料对主成分分析的定义。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "主成分分析把高维数据投到方差最大的若干方向上。这些方向彼此正交。"
+      ],
+      "answer": "主成分分析把高维数据投到方差最大的若干方向上。这些方向彼此正交。"
+    },
+    {
+      "id": "q087",
+      "input": "在我的资料中搜索「交叉验证」并引用原文。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "交叉验证把数据分成若干折，轮流用其中一折做验证。它用来估计模型在未见数据上的表现。"
+      ],
+      "answer": "交叉验证把数据分成若干折，轮流用其中一折做验证。它用来估计模型在未见数据上的表现。"
+    },
+    {
+      "id": "q088",
+      "input": "教材里怎么解释信息熵？请先检索知识库。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "信息熵衡量一个分布的不确定性。分布越均匀，熵越大。"
+      ],
+      "answer": "信息熵衡量一个分布的不确定性。分布越均匀，熵越大。"
+    },
+    {
+      "id": "q089",
+      "input": "请先检索知识库里关于牛顿法的定义。",
+      "expected_tools": [
+        "rag_search"
+      ],
+      "tags": [
+        "rag"
+      ],
+      "contexts": [
+        "牛顿法用函数值和导数值迭代求根。每一步都把当前点的切线与横轴的交点当作下一个近似。"
+      ],
+      "answer": "牛顿法用函数值和导数值迭代求根。每一步都把当前点的切线与横轴的交点当作下一个近似。"
+    },
+    {
+      "id": "q090",
+      "input": "请详细讲解召回率，面向初学者。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q091",
+      "input": "什么是精确率？请按概念讲解，并给一个例子。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q092",
+      "input": "解释一下学习率，学科是机器学习，水平是初学者。",
+      "expected_tools": [
+        "explain_concept"
+      ],
+      "tags": [
+        "explain"
+      ]
+    },
+    {
+      "id": "q093",
+      "input": "给一次函数出 2 道简单题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q094",
+      "input": "围绕「集合的交集」出 3 道中等题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q095",
+      "input": "出 1 道关于二叉树中序遍历的简单题。",
+      "expected_tools": [
+        "generate_questions"
+      ],
+      "tags": [
+        "quiz"
+      ]
+    },
+    {
+      "id": "q096",
+      "input": "我想在 21 天内入门概率论，请做一份学习计划。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q097",
+      "input": "为「动态规划」做一份 14 天计划，目标是能写出爬楼梯。",
+      "expected_tools": [
+        "generate_study_plan"
+      ],
+      "tags": [
+        "plan"
+      ]
+    },
+    {
+      "id": "q098",
+      "input": "用户上传了作业照片。请先识别。\n[题目图片路径] data/uploads/homework.png",
+      "expected_tools": [
+        "read_image"
+      ],
+      "tags": [
+        "vision"
+      ]
+    },
+    {
+      "id": "q099",
+      "input": "请识别图片中的手写步骤。\n[题目图片路径] data/uploads/steps.png",
+      "expected_tools": [
+        "read_image"
+      ],
+      "tags": [
+        "vision"
+      ]
+    },
+    {
+      "id": "q100",
+      "input": "用一句话说说你今天能帮我做什么。",
+      "expected_tools": [],
+      "tags": [
+        "direct"
+      ]
+    }
+  ]
+}

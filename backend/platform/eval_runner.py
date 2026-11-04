@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from backend.config import BASE_DIR, TRACE_DB_PATH
 from backend.platform.trace_store import _connect, init_trace_db
 
-DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v4.json"
+DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v5.json"
 
 # 未传入的指标保持未检查。忠实度只用调用方给出的分数，不在这里调用模型。
 GATE_MIN_ACCURACY = 0.90

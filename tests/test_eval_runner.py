@@ -13,16 +13,17 @@ class TestEvalRunner(unittest.TestCase):
         from backend.platform.eval_runner import load_dataset, validate_against_registry
 
         dataset = load_dataset()
-        self.assertGreaterEqual(len(dataset["samples"]), 56)
-        self.assertEqual(dataset.get("version"), "v4")
+        self.assertEqual(len(dataset["samples"]), 100)
+        self.assertEqual(dataset.get("version"), "v5")
         self.assertEqual(validate_against_registry(dataset), [])
 
     def test_v3_snapshot_stays_free_of_passages(self):
         from backend.platform.eval_runner import load_dataset
 
         v3 = load_dataset(PROJECT_ROOT / "eval" / "datasets" / "qa_baseline_v3.json")
-        v4 = load_dataset()
+        v4 = load_dataset(PROJECT_ROOT / "eval" / "datasets" / "qa_baseline_v4.json")
         self.assertEqual(v3.get("version"), "v3")
+        self.assertEqual(len(v4["samples"]), 56)
         self.assertTrue(all("contexts" not in sample for sample in v3["samples"]))
         self.assertEqual(
             [(sample["id"], sample["expected_tools"]) for sample in v3["samples"]],
@@ -46,7 +47,7 @@ class TestEvalRunner(unittest.TestCase):
             if "rag_search" in sample["expected_tools"]
         }
         self.assertEqual(retrieval_ids, {item["sample_id"] for item in applicable})
-        self.assertEqual(len(applicable), 10)
+        self.assertEqual(len(applicable), 16)
         self.assertEqual(mean_faithfulness(results), 1.0)
         self.assertTrue(all(item["passed"] for item in results))
         gate = check_release_gate(1.0, faithfulness=mean_faithfulness(results))
@@ -82,6 +83,53 @@ class TestEvalRunner(unittest.TestCase):
         self.assertEqual(mean_faithfulness(results), 0.5)
         gate = check_release_gate(1.0, faithfulness=0.5)
         self.assertFalse(gate["passed"])
+
+    def test_v5_adds_forty_four_items_in_the_agreed_mix(self):
+        from collections import Counter
+
+        import backend.agents.react_tools  # noqa: F401  注册全部工具
+        from backend.agents.tool_registry import get_all_specs
+        from backend.platform.eval_runner import load_dataset
+
+        v4 = load_dataset(PROJECT_ROOT / "eval" / "datasets" / "qa_baseline_v4.json")
+        v5 = load_dataset()
+        self.assertEqual(
+            [(sample["id"], sample["expected_tools"]) for sample in v4["samples"]],
+            [(sample["id"], sample["expected_tools"]) for sample in v5["samples"][:56]],
+        )
+        added = v5["samples"][56:]
+        counts = Counter(tuple(sample["expected_tools"]) for sample in added)
+        self.assertEqual(
+            dict(counts),
+            {
+                ("get_learning_state",): 3,
+                ("plan_review",): 3,
+                ("send_message",): 2,
+                ("reschedule",): 3,
+                ("save_mistake",): 2,
+                ("make_variants",): 2,
+                ("diagnose_error",): 2,
+                ("explain_traceback",): 2,
+                ("hint_level",): 2,
+                ("grade_item",): 2,
+                ("run_code",): 2,
+                ("run_tests",): 2,
+                ("rag_search",): 6,
+                ("explain_concept",): 3,
+                ("generate_questions",): 3,
+                ("generate_study_plan",): 2,
+                ("read_image",): 2,
+                (): 1,
+            },
+        )
+        covered = {name for sample in v5["samples"] for name in sample["expected_tools"]}
+        registered = {spec.name for spec in get_all_specs()}
+        self.assertEqual(registered - covered, set())
+        for sample in added:
+            if sample["expected_tools"] == ["rag_search"]:
+                self.assertEqual(sample["answer"], sample["contexts"][0])
+            else:
+                self.assertNotIn("contexts", sample)
 
     def test_score_requires_expected_tools(self):
         from backend.platform.eval_runner import score_tool_selection

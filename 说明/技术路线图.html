@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>智能学习助手 · 技术路线图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #f5f7fa;
+    padding: 40px 20px;
+    color: #1a237e;
+  }
+  .container {
+    max-width: 1280px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(26, 35, 126, 0.08);
+    padding: 40px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 26px;
+    color: #0d47a1;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #546e7a;
+    font-size: 14px;
+    margin-bottom: 36px;
+  }
+  .arch-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 30px;
+  }
+  .arch-layer {
+    display: flex;
+    align-items: center;
+    background: linear-gradient(135deg, #e3f2fd, #f5f5f5);
+    border: 1.5px solid #1976d2;
+    padding: 12px 20px;
+    border-radius: 6px;
+  }
+  .arch-layer:nth-child(1) { background: linear-gradient(135deg, #e3f2fd, #fafafa); border-color: #1976d2; }
+  .arch-layer:nth-child(2) { background: linear-gradient(135deg, #e8f5e9, #fafafa); border-color: #2e7d32; }
+  .arch-layer:nth-child(3) { background: linear-gradient(135deg, #fff3e0, #fafafa); border-color: #e64a19; }
+  .arch-layer:nth-child(4) { background: linear-gradient(135deg, #f3e5f5, #fafafa); border-color: #7b1fa2; }
+  .arch-layer:nth-child(5) { background: linear-gradient(135deg, #fce4ec, #fafafa); border-color: #c2185b; }
+  .arch-name {
+    font-weight: 700;
+    color: #0d47a1;
+    font-size: 15px;
+    min-width: 200px;
+  }
+  .arch-tech {
+    flex: 1;
+    color: #37474f;
+    font-size: 13px;
+    text-align: right;
+  }
+  .stage {
+    border: 2px dashed #90caf9;
+    border-radius: 10px;
+    padding: 24px 20px 20px;
+    margin-bottom: 14px;
+    position: relative;
+    background: #fafbfc;
+  }
+  .stage-label {
+    position: absolute;
+    top: -13px;
+    left: 24px;
+    background: linear-gradient(135deg, #1976d2, #0d47a1);
+    color: white;
+    padding: 4px 18px;
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .stage-tag {
+    position: absolute;
+    top: -13px;
+    right: 24px;
+    background: #fff3e0;
+    color: #e65100;
+    border: 1px solid #ffcc80;
+    padding: 4px 12px;
+    border-radius: 14px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .stage-content {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: stretch;
+  }
+  .box {
+    background: white;
+    border: 2px solid #1976d2;
+    border-radius: 8px;
+    padding: 12px 16px;
+    min-width: 160px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(25, 118, 210, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+    flex: 1;
+    max-width: 260px;
+  }
+  .box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(25, 118, 210, 0.18);
+  }
+  .box-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0d47a1;
+    margin-bottom: 4px;
+  }
+  .box-sub {
+    font-size: 11.5px;
+    color: #546e7a;
+    line-height: 1.55;
+  }
+  .box.user { border-color: #1976d2; }
+  .box.user .box-title { color: #0d47a1; }
+  .box.agent { border-color: #2e7d32; background: linear-gradient(135deg, #e8f5e9, #fafafa); }
+  .box.agent .box-title { color: #1b5e20; }
+  .box.tool { border-color: #e64a19; background: linear-gradient(135deg, #fff3e0, #fafafa); }
+  .box.tool .box-title { color: #bf360c; }
+  .box.rag { border-color: #7b1fa2; background: linear-gradient(135deg, #f3e5f5, #fafafa); }
+  .box.rag .box-title { color: #4a148c; }
+  .box.llm { border-color: #c2185b; background: linear-gradient(135deg, #fce4ec, #fafafa); }
+  .box.llm .box-title { color: #880e4f; }
+  .arrow-down {
+    text-align: center;
+    color: #1976d2;
+    font-size: 26px;
+    font-weight: 700;
+    padding: 4px 0;
+    line-height: 1;
+  }
+  .arrow-label {
+    display: inline-block;
+    background: #e3f2fd;
+    color: #1565c0;
+    padding: 2px 12px;
+    border-radius: 12px;
+    font-size: 11.5px;
+    margin: 0 8px;
+    vertical-align: middle;
+  }
+  .pipeline-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    width: 100%;
+  }
+  .pipeline-box {
+    background: white;
+    border: 1.5px solid #7b1fa2;
+    border-radius: 6px;
+    padding: 10px 8px;
+    text-align: center;
+    font-size: 13px;
+    color: #4a148c;
+    font-weight: 600;
+  }
+  .pipeline-box small {
+    display: block;
+    font-size: 10.5px;
+    color: #78909c;
+    font-weight: 400;
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    width: 100%;
+  }
+  .tool-box {
+    background: white;
+    border: 1.5px solid #e64a19;
+    border-radius: 6px;
+    padding: 10px 8px;
+    text-align: center;
+    font-size: 13px;
+    color: #bf360c;
+    font-weight: 600;
+  }
+  .tool-box small {
+    display: block;
+    font-size: 10.5px;
+    color: #78909c;
+    font-weight: 400;
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+  .decision-card {
+    margin-top: 20px;
+    background: linear-gradient(135deg, #fff8e1, #fff3e0);
+    border-left: 4px solid #ff6f00;
+    padding: 14px 20px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: #37474f;
+    line-height: 1.75;
+  }
+  .decision-card strong { color: #bf360c; }
+  .decision-card ul { margin-left: 20px; margin-top: 6px; }
+  .decision-card li { margin-bottom: 2px; }
+  .react-flow {
+    background: white;
+    border: 1.5px solid #2e7d32;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-top: 10px;
+    font-family: "Consolas", monospace;
+    font-size: 12px;
+    color: #1b5e20;
+    line-height: 1.8;
+    white-space: pre-line;
+  }
+  h2 {
+    color: #0d47a1;
+    font-size: 18px;
+    margin: 30px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #e3f2fd;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>智能学习助手 · 技术路线图</h1>
+  <div class="subtitle">基于通义千问 + 自研 ReAct + FAISS 的 RAG 智能体系统</div>
+
+  <!-- 分层架构 -->
+  <h2>一、五层架构</h2>
+  <div class="arch-stack">
+    <div class="arch-layer">
+      <span class="arch-name">表现层 Presentation</span>
+      <span class="arch-tech">Streamlit Web 界面 / 多页面路由 / 思维链可视化</span>
+    </div>
+    <div class="arch-layer">
+      <span class="arch-name">应用层 Application</span>
+      <span class="arch-tech">自研 ReAct Agent 循环 / 事件流式输出</span>
+    </div>
+    <div class="arch-layer">
+      <span class="arch-name">能力层 Capability</span>
+      <span class="arch-tech">Function Calling / 知识库检索 / 对话管理</span>
+    </div>
+    <div class="arch-layer">
+      <span class="arch-name">模型层 Model</span>
+      <span class="arch-tech">通义千问 qwen-max (DashScope OpenAI 兼容接口)</span>
+    </div>
+    <div class="arch-layer">
+      <span class="arch-name">基础设施层 Infra</span>
+      <span class="arch-tech">FAISS 向量库 / sentence-transformers / PyPDF2</span>
+    </div>
+  </div>
+
+  <!-- 数据流 -->
+  <h2>二、完整问答数据流（ReAct 循环）</h2>
+
+  <div class="stage">
+    <div class="stage-label">STEP 1 · 用户输入</div>
+    <div class="stage-tag">Streamlit 前端</div>
+    <div class="stage-content">
+      <div class="box user">
+        <div class="box-title">用户提问</div>
+        <div class="box-sub">浏览器输入<br>"什么是递归"</div>
+      </div>
+      <div class="box user">
+        <div class="box-title">状态管理</div>
+        <div class="box-sub">st.session_state<br>缓存 Agent + 历史</div>
+      </div>
+      <div class="box user">
+        <div class="box-title">消息构建</div>
+        <div class="box-sub">SystemMessage<br>+ HumanMessage</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓ <span class="arrow-label">react_stream()</span> ↓</div>
+
+  <!-- ReAct 循环 -->
+  <div class="stage">
+    <div class="stage-label">STEP 2 · ReAct Agent 循环 (max_iterations=5)</div>
+    <div class="stage-tag">自研循环 · 非黑盒</div>
+
+    <div class="react-flow">[构建消息: 系统提示 + 历史 + 用户问题]
+        ↓
+   ┌─────── 循环开始 ───────┐
+   │                          │
+   │  发送给 LLM (带工具定义) │
+   │       ↓                  │
+   │  LLM 返回响应            │
+   │       ↓                  │
+   │  有 tool_calls?          │
+   │   ├─ 是 → 执行工具       │
+   │   │      → 结果塞回消息  │
+   │   │      → 继续循环      │
+   │   └─ 否 → 返回最终答案   │
+   │                          │
+   └──────────────────────────┘</div>
+
+    <div class="stage-content" style="margin-top: 16px;">
+      <div class="box agent">
+        <div class="box-title">调用 LLM</div>
+        <div class="box-sub">llm_with_tools.invoke<br>HTTPS → DashScope</div>
+      </div>
+      <div class="box agent">
+        <div class="box-title">事件流式输出</div>
+        <div class="box-sub">yield TOOL_CALL 事件<br>前端实时渲染</div>
+      </div>
+      <div class="box agent">
+        <div class="box-title">错误处理</div>
+        <div class="box-sub">try/except 包裹<br>失败 yield ERROR</div>
+      </div>
+      <div class="box agent">
+        <div class="box-title">循环保护</div>
+        <div class="box-sub">max_iterations=5<br>防 API 耗尽</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓ <span class="arrow-label">tool_calls</span> ↓</div>
+
+  <!-- 工具调用 -->
+  <div class="stage">
+    <div class="stage-label">STEP 3 · Function Calling 双轨制</div>
+    <div class="stage-tag">JSON Schema (给LLM) ↔ Python 函数 (执行)</div>
+    <div class="tools-grid">
+      <div class="tool-box">
+        explain_concept 知识讲解
+        <small>结构化 Prompt<br>二次调用 LLM</small>
+      </div>
+      <div class="tool-box">
+        search_knowledge 知识检索
+        <small>查询 FAISS 向量库<br>Top-K 文本块</small>
+      </div>
+      <div class="tool-box">
+        generate_practice 出题练习
+        <small>基于知识点<br>生成练习题</small>
+      </div>
+      <div class="tool-box">
+        make_study_plan 学习计划
+        <small>个性化规划<br>按知识点排期</small>
+      </div>
+      <div class="tool-box">
+        query_history 对话管理
+        <small>历史消息检索<br>上下文衔接</small>
+      </div>
+      <div class="tool-box">
+        base_agent 基础能力
+        <small>对话循环管理<br>错误兜底</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓ <span class="arrow-label">工具结果 → ToolMessage</span> ↓</div>
+
+  <!-- RAG 管道 -->
+  <div class="stage">
+    <div class="stage-label">STEP 4 · RAG 知识检索管道</div>
+    <div class="stage-tag">FAISS + sentence-transformers</div>
+
+    <div class="pipeline-grid">
+      <div class="pipeline-box">
+        PDF 入库
+        <small>PyPDF2 提取文字<br>正则清理<br>切段 (500字/段)</small>
+      </div>
+      <div class="pipeline-box">
+        向量化
+        <small>sentence-transformers<br>text2vec-base-chinese<br>批量转向量</small>
+      </div>
+      <div class="pipeline-box">
+        存储
+        <small>FAISS IndexFlatIP<br>向量归一化<br>内积 = 余弦相似度</small>
+      </div>
+      <div class="pipeline-box">
+        检索
+        <small>查询转向量<br>Top-K 相关块<br>拼装上下文</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓ <span class="arrow-label">Top-K 文本块 + 工具结果</span> ↓</div>
+
+  <!-- 最终输出 -->
+  <div class="stage">
+    <div class="stage-label">STEP 5 · 最终答案生成</div>
+    <div class="stage-tag">LLM 综合判断 · 无 tool_calls 时结束</div>
+    <div class="stage-content">
+      <div class="box llm">
+        <div class="box-title">综合上下文</div>
+        <div class="box-sub">系统提示 + 历史<br>+ 工具结果 + 知识</div>
+      </div>
+      <div class="box llm">
+        <div class="box-title">LLM 最终推理</div>
+        <div class="box-sub">llm_with_tools.invoke<br>返回无 tool_calls</div>
+      </div>
+      <div class="box llm">
+        <div class="box-title">FINAL_ANSWER</div>
+        <div class="box-sub">yield 事件<br>前端渲染</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 关键决策 -->
+  <h2>三、关键技术决策</h2>
+  <div class="decision-card">
+    <strong>5 个核心决策：</strong>
+    <ul>
+      <li><strong>① 自研 ReAct 循环</strong>（非 AgentExecutor）— 为事件流式输出 + 思维链可视化 + 细粒度错误控制，代价是代码量大</li>
+      <li><strong>② FAISS 取代 pgvector/Chroma</strong> — 免 PostgreSQL 安装、部署简单、本地运行快</li>
+      <li><strong>③ OpenAI 兼容接口接入通义千问</strong> — LangChain 生态原生支持、切换模型零成本（仅改 base_url + api_key）</li>
+      <li><strong>④ 单文件 app.py</strong>（2000+ 行）— 共享 session_state 方便，代价是不利于协作</li>
+      <li><strong>⑤ 本地 sentence-transformers</strong>（非 API Embedding）— 免费、离线、中文模型够用</li>
+    </ul>
+  </div>
+
+  <!-- 性能指标 -->
+  <h2>四、性能指标</h2>
+  <div class="decision-card">
+    <strong>实测数据：</strong>
+    <ul>
+      <li>LLM 单次响应：<strong>1-3 秒</strong>（取决于提示长度）</li>
+      <li>ReAct 完整循环：<strong>5-15 秒</strong>（平均 2-3 轮工具调用）</li>
+      <li>PDF 处理：<strong>10 页约 3 秒</strong>（切段+向量化）</li>
+      <li>向量搜索：<strong>&lt; 50ms</strong>（FAISS 内积搜索）</li>
+      <li>Embedding 模型加载：<strong>首次 5-10 秒</strong>（@st.cache_resource 后零延迟）</li>
+    </ul>
+  </div>
+
+  <!-- Harness Engineering 体现 -->
+  <h2>五、Harness Engineering 在哪体现</h2>
+  <div class="decision-card">
+    <strong>把裸模型包装成可用 Agent 的"外壳"：</strong>
+    <ul>
+      <li><strong>工具定义</strong>（react_tools.py）— 6 个工具的 Schema + Executor 双轨</li>
+      <li><strong>Agent 循环</strong>（react_agent.py）— yield 事件流 + 迭代控制</li>
+      <li><strong>对话管理</strong>（base_agent.py）— 消息类型流转 + 上下文维护</li>
+      <li><strong>错误处理</strong> — try/except 包裹 LLM 调用 + 友好错误事件</li>
+      <li><strong>迭代限制</strong> — max_iterations=5 防 API 耗尽</li>
+    </ul>
+    这些"外壳"让 LLM 从"被动回答工具"变成"主动调度的智能体"。
+  </div>
+</div>
+</body>
+</html>

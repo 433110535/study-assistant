@@ -1,0 +1,305 @@
+"""
+ReAct Study Agent
+标准 ReAct 循环: Thought -> Action -> Observation -> ... -> Final Answer
+LLM 自行决定调用哪个工具，看到结果后判断是否足够，不够就继续调用
+"""
+import time
+from typing import List, Optional, Generator
+
+from langchain_core.messages import (
+    HumanMessage, SystemMessage, AIMessage, ToolMessage
+)
+from backend.agents.base_agent import BaseAgent
+from backend.agents.react_models import ReActEvent, ReActEventType, ReActStep, ReActResult
+from backend.agents.react_tools import get_tool_schemas, execute_tool
+from backend.platform.trace_store import TraceRun
+
+# FAISS 知识库
+try:
+    from backend.knowledge.knowledge_base_faiss import FAISSKnowledgeBase
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+
+REACT_SYSTEM_PROMPT = """你是一位专业的智能学习助手，名字叫"Jesse"。
+
+你是一位经验丰富的学习导师，擅长用通俗易懂的语言解释复杂概念，帮助学生建立知识体系。
+
+## 你可以使用的工具
+
+1. **rag_search**: 从知识库中检索相关学习资料。当用户的问题可能涉及已上传的文档内容时使用。
+2. **explain_concept**: 详细讲解一个概念，包含定义、类比和例子。当用户想要理解某个概念时使用。
+3. **generate_study_plan**: 生成结构化的学习计划。当用户想要规划学习路线时使用。
+4. **generate_questions**: 生成练习题，包含答案和解析。当用户想要练习巩固时使用。
+5. **read_image**: 识别用户上传的题目/作业图片中的文字与公式。当消息中包含「题目图片路径」时，**必须先**调用此工具，再视情况 `rag_search`，最后分步讲解并可给 1 道同考点变式题（变式题答案可折叠提示，勿直接泄露最终答案）。
+
+## 回答原则
+- 先思考用户需要什么帮助，再决定是否需要调用工具
+- 如果问题简单、不需要工具，直接回答即可
+- 可以在一次回答中调用多个工具（比如先检索资料再讲解概念）
+- 调用工具后，基于工具返回的结果，用通俗易懂的语言组织最终回答
+- 回答结构清晰，多用例子和类比
+- 用中文回答
+"""
+
+
+class ReActStudyAgent(BaseAgent):
+    """
+    ReAct 智能学习助手
+    使用 function calling 实现工具调用循环
+    """
+
+    def __init__(self, max_iterations: int = 5, session_id: str = "default", **kwargs):
+        super().__init__(**kwargs)
+        self.max_iterations = max_iterations
+        self.session_id = session_id
+
+        # 绑定工具到 LLM
+        self.tool_schemas = get_tool_schemas()
+        self.llm_with_tools = self.llm.bind_tools(self.tool_schemas)
+
+        # FAISS 知识库（兼容 StudyAssistantAgent 的接口）
+        self._kb = None
+        self._rag_enabled = False
+        if FAISS_AVAILABLE:
+            try:
+                self._kb = FAISSKnowledgeBase()
+                self._rag_enabled = True
+                if self.verbose:
+                    print("[ReAct] FAISS 知识库加载成功")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[ReAct] FAISS 知识库加载失败: {e}")
+
+    def get_system_prompt(self) -> str:
+        """实现抽象方法"""
+        return REACT_SYSTEM_PROMPT
+
+    def react_stream(self, user_input: str) -> Generator[ReActEvent, None, None]:
+        """
+        ReAct 循环核心方法，逐步 yield 事件
+        最终回答使用流式输出
+
+        Args:
+            user_input: 用户输入
+
+        Yields:
+            ReActEvent: 每个步骤的事件
+        """
+        messages = self._build_messages(user_input)
+        iteration = 0
+        trace = TraceRun(user_input=user_input, session_id=self.session_id)
+        trace.start()
+        final_status = "ok"
+
+        for iteration in range(1, self.max_iterations + 1):
+            yield ReActEvent(
+                event_type=ReActEventType.THINKING,
+                content="Jesse正在思考...",
+                iteration=iteration
+            )
+
+            try:
+                response = self.llm_with_tools.invoke(messages)
+            except Exception as e:
+                final_status = "error"
+                yield ReActEvent(
+                    event_type=ReActEventType.ERROR,
+                    content=f"LLM 调用失败: {str(e)}",
+                    iteration=iteration
+                )
+                trace.finish("", iteration, status=final_status)
+                break
+
+            messages.append(response)
+
+            if not response.tool_calls:
+                yield ReActEvent(
+                    event_type=ReActEventType.THINKING,
+                    content="Jesse正在组织回答...",
+                    iteration=iteration
+                )
+                streamed = ""
+                try:
+                    for chunk in self.llm.stream(messages[:-1]):
+                        if chunk.content:
+                            streamed += chunk.content
+                            yield ReActEvent(
+                                event_type=ReActEventType.ANSWER_CHUNK,
+                                content=chunk.content,
+                                iteration=iteration
+                            )
+                except Exception as e:
+                    streamed = streamed or response.content or f"回答生成失败: {e}"
+
+                final_content = streamed or response.content
+                yield ReActEvent(
+                    event_type=ReActEventType.FINAL_ANSWER,
+                    content=final_content,
+                    iteration=iteration
+                )
+                self.add_to_history("user", user_input)
+                self.add_to_history("assistant", final_content)
+                trace.finish(final_content or "", iteration, status=final_status)
+                return
+
+            for tc in response.tool_calls:
+                tool_name = tc["name"]
+                tool_args = tc["args"]
+                tool_call_id = tc.get("id", "")
+
+                yield ReActEvent(
+                    event_type=ReActEventType.TOOL_CALL,
+                    content=f"调用工具: {tool_name}",
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    iteration=iteration
+                )
+
+                t0 = time.perf_counter()
+                result = execute_tool(self, tool_name, tool_args)
+                tool_ms = int((time.perf_counter() - t0) * 1000)
+                tool_status = "error" if result.startswith(
+                    ("未知工具", "工具参数错误", "工具执行失败", "工具 ", "未配置", "图片不存在")
+                ) else "ok"
+                try:
+                    trace.log_tool_call(
+                        tool_name, tool_args, result, tool_status, tool_ms
+                    )
+                except Exception:
+                    pass
+
+                preview = result[:500] + "..." if len(result) > 500 else result
+                yield ReActEvent(
+                    event_type=ReActEventType.TOOL_RESULT,
+                    content=f"获取结果: {preview[:100]}",
+                    tool_name=tool_name,
+                    tool_result=result,
+                    iteration=iteration
+                )
+
+                messages.append(
+                    ToolMessage(content=result, tool_call_id=tool_call_id)
+                )
+
+        yield ReActEvent(
+            event_type=ReActEventType.THINKING,
+            content="Jesse正在组织最终回答...",
+            iteration=iteration
+        )
+
+        streamed = ""
+        try:
+            for chunk in self.llm.stream(messages):
+                if chunk.content:
+                    streamed += chunk.content
+                    yield ReActEvent(
+                        event_type=ReActEventType.ANSWER_CHUNK,
+                        content=chunk.content,
+                        iteration=iteration
+                    )
+        except Exception as e:
+            streamed = streamed or f"抱歉，生成回答时出错: {str(e)}"
+
+        final_content = streamed or "（无内容）"
+        yield ReActEvent(
+            event_type=ReActEventType.FINAL_ANSWER,
+            content=final_content,
+            iteration=iteration
+        )
+        self.add_to_history("user", user_input)
+        self.add_to_history("assistant", final_content)
+        trace.finish(final_content or "", iteration, status=final_status)
+
+    def react(self, user_input: str) -> ReActResult:
+        """
+        同步执行 ReAct 循环，返回完整结果
+
+        Args:
+            user_input: 用户输入
+
+        Returns:
+            ReActResult: 完整的运行结果
+        """
+        steps = []
+        final_answer = ""
+        tools_used = []
+        total_iterations = 0
+
+        for event in self.react_stream(user_input):
+            total_iterations = max(total_iterations, event.iteration)
+
+            if event.event_type == ReActEventType.TOOL_CALL:
+                if event.tool_name not in tools_used:
+                    tools_used.append(event.tool_name)
+
+            steps.append(ReActStep(
+                iteration=event.iteration,
+                event_type=event.event_type,
+                content=event.content,
+                tool_name=event.tool_name,
+                tool_args=event.tool_args,
+                tool_result_preview=event.tool_result[:300] if event.tool_result else ""
+            ))
+
+            if event.event_type == ReActEventType.FINAL_ANSWER:
+                final_answer = event.content
+
+        return ReActResult(
+            user_input=user_input,
+            final_answer=final_answer,
+            steps=steps,
+            total_iterations=total_iterations,
+            tools_used=tools_used
+        )
+
+    # ========== 向后兼容方法 ==========
+
+    def chat_with_tools_stream(self, user_input: str) -> Generator[str, None, None]:
+        """向后兼容：只 yield 最终回答的文本"""
+        for event in self.react_stream(user_input):
+            if event.event_type == ReActEventType.FINAL_ANSWER:
+                yield event.content
+
+    def chat_with_tools(self, user_input: str) -> str:
+        """向后兼容：同步返回最终回答"""
+        result = ""
+        for event in self.react_stream(user_input):
+            if event.event_type == ReActEventType.FINAL_ANSWER:
+                result = event.content
+        return result
+
+    def chat(self, user_input: str) -> str:
+        """普通对话（不带工具）"""
+        messages = self.format_messages(user_input)
+        self.add_to_history("user", user_input)
+        response = self.llm.invoke(messages)
+        self.add_to_history("assistant", response.content)
+        return response.content
+
+    def chat_stream(self, user_input: str) -> Generator[str, None, None]:
+        """普通流式对话（不带工具）"""
+        messages = self.format_messages(user_input)
+        self.add_to_history("user", user_input)
+        full_response = ""
+        for chunk in self.llm.stream(messages):
+            if hasattr(chunk, 'content'):
+                full_response += chunk.content
+                yield chunk.content
+        self.add_to_history("assistant", full_response)
+
+    def _build_messages(self, user_input: str) -> List:
+        """构建消息列表（用于 ReAct 循环）"""
+        messages = [SystemMessage(content=self.get_system_prompt())]
+        for msg in self.chat_history[-10:]:
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                messages.append(AIMessage(content=msg["content"]))
+        messages.append(HumanMessage(content=user_input))
+        return messages
+
+    def set_knowledge_base(self, kb):
+        """外部设置知识库"""
+        self._kb = kb
+        self._rag_enabled = kb is not None

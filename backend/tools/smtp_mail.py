@@ -29,17 +29,23 @@ def send_smtp_text(
     smtp_factory: Optional[Callable[..., Any]] = None,
     smtp_ssl_factory: Optional[Callable[..., Any]] = None,
 ) -> None:
+    from backend.llm_helper import invoke_named
+
     message = build_review_email(sender, recipient, body)
     use_ssl = int(port) == 465
     factory = smtp_ssl_factory if use_ssl else smtp_factory
     if factory is None:
         factory = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
-    with factory(host, int(port), timeout=timeout_s) as client:
-        if not use_ssl:
-            client.starttls()
-        if username:
-            client.login(username, password)
-        client.send_message(message)
+
+    def _send() -> None:
+        with factory(host, int(port), timeout=timeout_s) as client:
+            if not use_ssl:
+                client.starttls()
+            if username:
+                client.login(username, password)
+            client.send_message(message)
+
+    invoke_named("smtp", _send, label="邮件")
 
 
 def sender_from_env(

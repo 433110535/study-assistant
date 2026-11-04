@@ -78,18 +78,23 @@ def read_image(image_path: str, focus: str = "全部") -> str:
 
         dashscope.api_key = DASHSCOPE_API_KEY
         model = os.getenv("VISION_MODEL", VISION_MODEL)
-        resp = MultiModalConversation.call(
-            model=model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"image": data_uri},
-                        {"text": prompt},
-                    ],
-                }
-            ],
-        )
+        from backend.llm_helper import invoke_named
+
+        def _call():
+            return MultiModalConversation.call(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"image": data_uri},
+                            {"text": prompt},
+                        ],
+                    }
+                ],
+            )
+
+        resp = invoke_named("vision", _call, label="识图")
     except Exception as e:
         return f"视觉模型调用失败: {e}"
 

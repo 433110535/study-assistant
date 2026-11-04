@@ -19,8 +19,13 @@ def post_feishu_text(url: str, text: str, timeout_s: int = 10) -> None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:
-        raw = response.read().decode("utf-8", errors="replace")
+    from backend.llm_helper import invoke_named
+
+    def _post() -> str:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            return response.read().decode("utf-8", errors="replace")
+
+    raw = invoke_named("feishu", _post, label="飞书")
     if not raw:
         return
     data = json.loads(raw)

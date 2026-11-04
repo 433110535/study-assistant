@@ -143,6 +143,24 @@ class TestModelResilience(unittest.TestCase):
         bound = llm.bind_tools([])
         self.assertIsInstance(bound, self.helper.ResilientLLM)
 
+    def test_named_circuit_does_not_trip_the_model(self):
+        def down():
+            raise RuntimeError("down")
+
+        for _ in range(3):
+            with self.assertRaises(RuntimeError):
+                self.helper.invoke_named(
+                    "vision",
+                    down,
+                    label="识图",
+                    sleeper=lambda _s: None,
+                    jitter=lambda: 0,
+                )
+        with self.assertRaises(self.helper.LLMUnavailable) as caught:
+            self.helper.invoke_named("vision", down, label="识图", sleeper=lambda _s: None)
+        self.assertIn("识图", str(caught.exception))
+        self.assertEqual(self.helper.invoke_model(lambda: "ok", sleeper=lambda _s: None), "ok")
+
     def test_async_invoke_uses_the_same_circuit(self):
         calls = {"n": 0}
 

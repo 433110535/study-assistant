@@ -70,21 +70,38 @@ class _ModelCircuit:
 
 
 _circuit = _ModelCircuit()
+_named_circuits: dict = {}
+
+
+def circuit_for(name: str) -> _ModelCircuit:
+    if name == "llm":
+        return _circuit
+    found = _named_circuits.get(name)
+    if found is None:
+        found = _ModelCircuit()
+        found.clock = _circuit.clock
+        _named_circuits[name] = found
+    return found
 
 
 def reset_model_circuit() -> None:
     _circuit.reset()
+    for circuit in _named_circuits.values():
+        circuit.reset()
 
 
-def invoke_model(
+def invoke_named(
+    name: str,
     call: Callable[[], Any],
     *,
+    label: str = "外部调用",
     sleeper: Optional[Callable[[float], None]] = None,
     jitter: Optional[Callable[[], float]] = None,
 ) -> Any:
-    """调用一次模型。失败再试，一共 3 次。熔断打开时不调用 call。"""
-    if _circuit.blocked():
-        raise LLMUnavailable("模型连续失败，已暂时熔断，请稍后再试。")
+    """按名称分开熔断。失败再试，一共 3 次。TypeError 不重试。"""
+    circuit = circuit_for(name)
+    if circuit.blocked():
+        raise LLMUnavailable(f"{label}连续失败，已暂时熔断，请稍后再试。")
     sleep = sleeper if sleeper is not None else time.sleep
     sample = jitter if jitter is not None else _sample_jitter
     last: Optional[BaseException] = None
@@ -96,13 +113,23 @@ def invoke_model(
         except Exception as exc:
             last = exc
             if attempt + 1 >= _MODEL_ATTEMPTS:
-                _circuit.failure()
+                circuit.failure()
                 raise
             sleep(_backoff_seconds(attempt, sample()))
         else:
-            _circuit.success()
+            circuit.success()
             return result
-    raise last or LLMUnavailable("模型调用失败")
+    raise last or LLMUnavailable(f"{label}失败")
+
+
+def invoke_model(
+    call: Callable[[], Any],
+    *,
+    sleeper: Optional[Callable[[float], None]] = None,
+    jitter: Optional[Callable[[], float]] = None,
+) -> Any:
+    """调用一次模型。失败再试，一共 3 次。熔断打开时不调用 call。"""
+    return invoke_named("llm", call, label="模型", sleeper=sleeper, jitter=jitter)
 
 
 def stream_model(

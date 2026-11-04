@@ -2210,10 +2210,10 @@ def render_mistakes():
     """错题本：确认后按 SM-2 进入复习，到期卡片由独立脚本发送。"""
     from datetime import timezone
 
-    from backend.platform.mistake_store import (
-        confirm_mistake,
-        dismiss_mistake,
-        list_mistakes,
+    from backend.api.local_client import (
+        confirm_user_mistake,
+        dismiss_user_mistake,
+        list_user_mistakes,
     )
     from backend.platform.review_planner import (
         get_learning_state,
@@ -2224,13 +2224,13 @@ def render_mistakes():
     )
 
     page_header("mistakes", chips=[
-        "<b>写入</b> 默认待确认",
+        "<b>写入</b> /v1/mistakes",
         "<b>间隔</b> SM-2",
         "<b>推送</b> 独立脚本",
     ])
     user_id = st.session_state.get("auth_user") or "student"
-    pending = list_mistakes(user_id, status="pending")
-    confirmed = list_mistakes(user_id, status="confirmed")
+    pending = list_user_mistakes(user_id, status="pending")
+    confirmed = list_user_mistakes(user_id, status="confirmed")
 
     section_head("01", "待确认", "PENDING")
     if not pending:
@@ -2253,11 +2253,11 @@ def render_mistakes():
             yes_col, no_col = st.columns(2)
             with yes_col:
                 if st.button("确认并加入复习", key=f"confirm_{item['id']}", type="primary"):
-                    confirm_mistake(item["id"])
+                    confirm_user_mistake(item["id"])
                     st.rerun()
             with no_col:
                 if st.button("丢弃", key=f"dismiss_{item['id']}"):
-                    dismiss_mistake(item["id"])
+                    dismiss_user_mistake(item["id"])
                     st.rerun()
 
     section_head("02", "复习队列", "REVIEW")

@@ -85,6 +85,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="没有可确认的待确认错题")
         return {"id": mistake_id, "status": "confirmed"}
 
+    @app.post("/v1/mistakes/{mistake_id}/dismiss", dependencies=guard)
+    def dismiss(mistake_id: str) -> dict:
+        from backend.platform.mistake_store import dismiss_mistake
+
+        if not dismiss_mistake(mistake_id, db_path=database):
+            raise HTTPException(status_code=404, detail="没有可丢弃的待确认错题")
+        return {"id": mistake_id, "status": "dismissed"}
+
     @app.get("/v1/review/plan", dependencies=guard)
     def review_plan(user_id: str = "student") -> dict:
         from backend.platform.review_planner import get_learning_state

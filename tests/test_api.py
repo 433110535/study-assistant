@@ -125,6 +125,26 @@ class TestLocalApi(unittest.TestCase):
             headers=self._headers(),
         )
         self.assertEqual(again.status_code, 404)
+        other = create_pending(
+            "student",
+            subject="数学",
+            concept="换元",
+            error_type="计算失误",
+            question_text="求积分",
+            student_answer="错",
+            correct_answer="对",
+            db_path=self.db,
+        )
+        from backend.api.local_client import dismiss_user_mistake, list_user_mistakes
+
+        self.assertEqual(list_user_mistakes("student", status="pending", db_path=self.db)[0]["id"], other)
+        self.assertEqual(dismiss_user_mistake(other, db_path=self.db)["status"], "dismissed")
+        self.assertEqual(list_user_mistakes("student", status="pending", db_path=self.db), [])
+        missing = self.client.post(
+            f"/v1/mistakes/{other}/dismiss",
+            headers=self._headers(),
+        )
+        self.assertEqual(missing.status_code, 404)
         self.assertTrue(
             reschedule(mistake_id, "2026-11-01T00:00:00+00:00", now=NOW, db_path=self.db)
         )

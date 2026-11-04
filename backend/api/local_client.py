@@ -30,3 +30,25 @@ def request_json(
 
 def failure_board(db_path: Optional[Path] = None) -> Dict[str, Any]:
     return request_json("GET", "/v1/eval/latest", db_path=db_path)
+
+
+def list_user_mistakes(
+    user_id: str,
+    status: str = "",
+    db_path: Optional[Path] = None,
+) -> list:
+    data = request_json(
+        "GET",
+        "/v1/mistakes",
+        db_path=db_path,
+        params={"user_id": user_id, "status": status},
+    )
+    return data["mistakes"]
+
+
+def confirm_user_mistake(mistake_id: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
+    return request_json("POST", f"/v1/mistakes/{mistake_id}/confirm", db_path=db_path)
+
+
+def dismiss_user_mistake(mistake_id: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
+    return request_json("POST", f"/v1/mistakes/{mistake_id}/dismiss", db_path=db_path)

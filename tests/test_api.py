@@ -367,6 +367,32 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["text"], "列表 vs 元组")
 
+    def test_questions_route_uses_the_injected_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+
+        def fake(topic: str, difficulty: str = "中等", count: int = 3, question_type: str = "mixed") -> str:
+            return f"{topic}|{difficulty}|{count}|{question_type}"
+
+        app = create_app(self.db, api_key="secret", questions_fn=fake)
+        with TestClient(app) as client:
+            empty = client.post("/v1/questions", json={"topic": " "}, headers=self._headers())
+            self.assertEqual(empty.status_code, 400)
+            bad_count = client.post(
+                "/v1/questions",
+                json={"topic": "列表", "count": 11},
+                headers=self._headers(),
+            )
+            self.assertEqual(bad_count.status_code, 400)
+            ok = client.post(
+                "/v1/questions",
+                json={"topic": "列表", "difficulty": "基础", "count": 2, "question_type": "填空题"},
+                headers=self._headers(),
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["text"], "列表|基础|2|填空题")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

@@ -17,7 +17,6 @@ sys.path.insert(0, str(project_root))
 from backend.agents.react_agent import ReActStudyAgent
 from backend.llm_helper import text_content
 from backend.tools.plan_generator import generate_study_plan, create_daily_schedule, generate_milestone_checklist
-from backend.tools.question_generator import generate_questions, check_answer
 from backend.config import validate_config, LLM_MODEL, UPLOADS_DIR
 import re
 import tempfile
@@ -1313,7 +1312,7 @@ def render_daily():
 
 def render_quiz():
     page_header("quiz", chips=[
-        "<b>题型</b> 选择 / 填空 / 编程",
+        "<b>出题</b> /v1/questions",
         "<b>批改</b> 标准答案对照",
     ])
 
@@ -1337,7 +1336,9 @@ def render_quiz():
             with st.spinner("正在生成练习题，请稍候…"):
                 try:
                     qtype = "mixed" if question_type == "混合" else question_type
-                    questions = generate_questions(topic, difficulty, count, qtype)
+                    from backend.api.local_client import questions_text
+
+                    questions = questions_text(topic, difficulty, int(count), qtype)
                     st.session_state.last_quiz = questions
                     # 新题不沿用上一轮的答案与批改结果
                     st.session_state.pop("last_quiz_result", None)

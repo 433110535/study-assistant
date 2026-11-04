@@ -19,6 +19,17 @@ from fastapi.responses import StreamingResponse
 from backend.config import TRACE_DB_PATH
 
 
+def _question_count(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    count = int(value)
+    if count < 1 or count > 10:
+        return None
+    return count
+
+
 def _parse_now(value: str):
     text = (value or "").strip()
     if not text:
@@ -46,6 +57,7 @@ def create_app(
     agent_factory: Optional[Callable[[], Any]] = None,
     explain_fn: Optional[Callable[..., str]] = None,
     compare_fn: Optional[Callable[..., str]] = None,
+    questions_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -229,6 +241,23 @@ def create_app(
 
             fn = compare_concepts
         return {"text": fn(left, right)}
+
+    @app.post("/v1/questions", dependencies=guard)
+    def questions(payload: dict = Body(...)) -> dict:
+        topic = str(payload.get("topic") or "").strip()
+        count = _question_count(payload.get("count", 3))
+        if not topic:
+            raise HTTPException(status_code=400, detail="topic 不能为空")
+        if count is None:
+            raise HTTPException(status_code=400, detail="count 必须是 1 到 10 的整数")
+        difficulty = str(payload.get("difficulty") or "中等")
+        question_type = str(payload.get("question_type") or "mixed")
+        fn = questions_fn
+        if fn is None:
+            from backend.tools.question_generator import generate_questions
+
+            fn = generate_questions
+        return {"text": fn(topic, difficulty, count, question_type)}
 
     return app
 

@@ -72,6 +72,27 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def questions_text(
+    topic: str,
+    difficulty: str = "中等",
+    count: int = 3,
+    question_type: str = "mixed",
+    db_path: Optional[Path] = None,
+) -> str:
+    data = request_json(
+        "POST",
+        "/v1/questions",
+        db_path=db_path,
+        json_body={
+            "topic": topic,
+            "difficulty": difficulty,
+            "count": count,
+            "question_type": question_type,
+        },
+    )
+    return str(data.get("text") or "")
+
+
 def compare_text(
     concept1: str,
     concept2: str,

@@ -57,13 +57,14 @@
 - **工具注册表**：`ToolSpec` 元数据（超时、副作用、成本提示）。
 - **运行 trace（SQLite）**：每次问答 run 与 tool_call 写入 `data/app.db`，为评测与中台打地基。
 - **问答持久化**：同一账号的最近一次对话写入本机 SQLite，刷新页面后恢复；「开启新会话」只清空当前界面，不删除旧记录。
+- **评测基线**：`eval/datasets/qa_baseline_v1.json` 含 40 条固定问题。`python -m backend.platform.eval_runner --dry-run` 只校验工具是否已注册；`--live` 才会调用模型并统计工具选择是否覆盖预期。
 
 ### 规划中
 
 - 拍照批改闭环（判分、错题本、变式题、复习提醒）
 - 代码执行助教（沙箱 + 测试用例）
 - 主动复习推送（独立 Worker + SM-2）
-- 数据中台 / 评测中台（数据集版本、离线 runner、发布门禁）
+- 数据中台 / 评测中台（发布门禁、线上抽样、服务化）
 
 ---
 
@@ -156,6 +157,7 @@ streamlit run frontend/app.py
 
 ```bash
 python -m unittest discover -s tests -v
+python -m backend.platform.eval_runner --dry-run
 ```
 
 ---

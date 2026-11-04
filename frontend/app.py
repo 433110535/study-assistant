@@ -301,6 +301,7 @@ def clear_session_data():
         "code_tutor_tests",
         "code_tutor_timeout",
         "code_tutor_level",
+        "code_tutor_thread",
         "rag_history",
         "daily_schedule",
         "schedule_topics",
@@ -1889,8 +1890,42 @@ def render_kb():
             st.warning("提示：知识库为空，请先上传PDF文档")
 
 
+def _load_code_attempt(code: str, tests: str) -> None:
+    st.session_state["code_tutor_source"] = code
+    st.session_state["code_tutor_tests"] = tests
+
+
+def _start_new_code_thread() -> None:
+    from backend.platform.code_attempt_store import new_thread_id
+
+    st.session_state["code_tutor_thread"] = new_thread_id()
+    st.session_state["code_tutor_source"] = ""
+    st.session_state["code_tutor_tests"] = ""
+    st.session_state.pop("code_tutor_result", None)
+
+
+def _ensure_code_thread(user_id: str) -> str:
+    from backend.platform.code_attempt_store import latest_thread, list_attempts, new_thread_id
+
+    if st.session_state.get("code_tutor_thread"):
+        return st.session_state["code_tutor_thread"]
+    thread_id = latest_thread(user_id)
+    if thread_id:
+        attempts = list_attempts(user_id, thread_id)
+        st.session_state["code_tutor_thread"] = thread_id
+        if attempts and "code_tutor_source" not in st.session_state:
+            last = attempts[-1]
+            st.session_state["code_tutor_source"] = last["code"]
+            st.session_state["code_tutor_tests"] = last["tests"] or ""
+        return thread_id
+    thread_id = new_thread_id()
+    st.session_state["code_tutor_thread"] = thread_id
+    return thread_id
+
+
 def render_code_tutor():
     """代码助教：本机沙箱跑代码和测试，失败时只给分级提示。"""
+    from backend.platform.code_attempt_store import append_attempt, list_attempts
     from backend.tools.code_sandbox import (
         format_run_result,
         hint_for_level,
@@ -1898,14 +1933,17 @@ def render_code_tutor():
         run_student_code,
     )
 
+    user_id = st.session_state.get("auth_user") or "student"
+    thread_id = _ensure_code_thread(user_id)
+
     page_header("code", chips=[
         "<b>隔离</b> 独立进程",
-        "<b>教学</b> 先提示后答案",
+        "<b>记录</b> 改完可再跑",
     ])
     st.caption(
         "在本机沙箱里运行 Python。禁止读写文件、启动子进程和联网。"
         "失败时只解释错误并按级别给提示，不直接给出改正后的完整代码。"
-        "这是进程隔离，不是容器，不要把本页暴露到公网。"
+        "同一次练习的每次运行都会留下，可以载入某一版再改。这是进程隔离，不是容器。"
     )
 
     section_head("01", "代码与测试", "RUN")
@@ -1928,58 +1966,90 @@ def render_code_tutor():
         value=2,
         key="code_tutor_timeout",
     )
-    if st.button("运行", type="primary", key="code_tutor_run"):
+    run_col, new_col = st.columns(2)
+    with run_col:
+        run_clicked = st.button("运行", type="primary", key="code_tutor_run")
+    with new_col:
+        st.button("新开一题", key="code_tutor_new", on_click=_start_new_code_thread)
+    if run_clicked:
         result = run_student_code(code, tests=tests, timeout_s=float(timeout))
         st.session_state["code_tutor_result"] = result
-        record_code_run(
-            st.session_state.get("auth_user") or "student",
-            code,
-            tests,
-            result,
-        )
+        append_attempt(user_id, thread_id, code, tests, result)
+        record_code_run(user_id, code, tests, result)
 
     result = st.session_state.get("code_tutor_result")
-    if not result:
+    attempts = list_attempts(user_id, thread_id)
+    if not result and not attempts:
         empty_state(
             "SANDBOX",
             "还没有运行记录",
-            "贴上代码，可选地写几条 assert，然后运行。失败时只会给出分级提示。",
+            "贴上代码，可选地写几条 assert，然后运行。失败时只会给出分级提示。同一次练习可以改完再跑。",
         )
         return
 
-    status = result.get("status") or "error"
-    labels = {
-        "passed": "通过",
-        "failed": "未通过",
-        "rejected": "被沙箱拒绝",
-        "timeout": "超时",
-        "error": "运行器错误",
-    }
-    section_head("02", "运行结果", "RESULT")
-    st.markdown(f"**{labels.get(status, status)}**")
-    if result.get("exception_type"):
-        st.text(f"{result['exception_type']}: {result.get('exception_message') or ''}")
-        if result.get("line"):
-            st.caption(f"行号 {result['line']}")
-    st.markdown("标准输出")
-    st.code(result.get("stdout") or "（空）", language="text")
-    if result.get("stderr"):
-        st.markdown("标准错误")
-        st.code(result.get("stderr"), language="text")
+    if result:
+        status = result.get("status") or "error"
+        labels = {
+            "passed": "通过",
+            "failed": "未通过",
+            "rejected": "被沙箱拒绝",
+            "timeout": "超时",
+            "error": "运行器错误",
+        }
+        section_head("02", "运行结果", "RESULT")
+        st.markdown(f"**{labels.get(status, status)}**")
+        if result.get("exception_type"):
+            st.text(f"{result['exception_type']}: {result.get('exception_message') or ''}")
+            if result.get("line"):
+                st.caption(f"行号 {result['line']}")
+        st.markdown("标准输出")
+        st.code(result.get("stdout") or "（空）", language="text")
+        if result.get("stderr"):
+            st.markdown("标准错误")
+            st.code(result.get("stderr"), language="text")
 
-    if status == "passed":
+        if status != "passed":
+            section_head("03", "分级提示", "HINT")
+            observation = format_run_result(result)
+            level = st.radio(
+                "提示级别",
+                options=[1, 2, 3],
+                horizontal=True,
+                key="code_tutor_level",
+                format_func=lambda n: {1: "1 只说类别", 2: "2 指出行号", 3: "3 检查方向"}[n],
+            )
+            st.text(hint_for_level(level, observation))
+
+    _render_code_history(attempts)
+
+
+_ATTEMPT_LABELS = {
+    "passed": "通过",
+    "failed": "未通过",
+    "rejected": "被拒绝",
+    "timeout": "超时",
+    "error": "错误",
+}
+
+
+def _render_code_history(attempts) -> None:
+    section_head("04", "这次练习的修改", "HISTORY")
+    if not attempts:
+        st.caption("运行之后，每一版代码会出现在这里。")
         return
-
-    section_head("03", "分级提示", "HINT")
-    observation = format_run_result(result)
-    level = st.radio(
-        "提示级别",
-        options=[1, 2, 3],
-        horizontal=True,
-        key="code_tutor_level",
-        format_func=lambda n: {1: "1 只说类别", 2: "2 指出行号", 3: "3 检查方向"}[n],
-    )
-    st.text(hint_for_level(level, observation))
+    for item in reversed(attempts):
+        label = _ATTEMPT_LABELS.get(item["status"], item["status"])
+        detail = item.get("exception_type") or ""
+        with st.container(border=True):
+            st.markdown(f"**第 {item['seq']} 次 · {label}**")
+            if detail:
+                st.caption(detail)
+            st.button(
+                "载入再改",
+                key=f"code_load_{item['id']}",
+                on_click=_load_code_attempt,
+                args=(item["code"], item.get("tests") or ""),
+            )
 
 
 def render_mistakes():

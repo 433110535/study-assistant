@@ -61,7 +61,7 @@
 - **代码助教（本机沙箱）**：代码助教页可运行学生代码和 `assert` 测试。失败时按 1–3 级提示，不直接给改正后的完整代码。同一次练习的每次运行会留下，可载入某一版再改。问答里对应工具为 `run_code`、`run_tests`、`explain_traceback`、`hint_level`。当前是进程隔离，不是容器，不要暴露到公网。
 - **对照标准答案批改**：习题页可在本地判分。答错后给出错因，并把题干里的数字换成变式，不附答案。没有标准答案时不判分。错题仍要在「错题本」确认。问答工具为 `grade_item`、`diagnose_error`、`make_variants`。
 - **主动复习**：页面外每天北京时间 8:00 生成卡片。未配置飞书和 SMTP 时只写本地发件箱。配齐 `SMTP_HOST`、`SMTP_FROM`、`REVIEW_EMAIL_TO` 后发邮件。`python -m backend.workers.review_reply --text 推到晚上` 可改期；`--serve` 只听 127.0.0.1，不是飞书回调。
-- **评测基线**：默认集 `eval/datasets/qa_baseline_v5.json` 共 100 条（v1–v4 仍保留）。`python -m backend.platform.eval_runner --dry-run` 不调用模型，会打工具选择，并对 16 条检索题用固定片段打忠实度。`--live` 才调用模型，目前只打工具选择。传入的忠实度低于 0.85 会拦截。
+- **评测基线**：默认集 `eval/datasets/qa_baseline_v5.json` 共 100 条（v1–v4 仍保留）。`python -m backend.platform.eval_runner --dry-run` 不调用模型，会打工具选择，并对 16 条检索题用固定片段打忠实度。`--live` 才调用模型。调用了 `rag_search` 时，用当次检索正文打忠实度；没检索的题不记分。传入或算出的忠实度低于 0.85 会拦截。
 - **失败归因**：侧栏「失败归因」读取最近一次 `eval_runs`，按缺失工具列出失败样本。没有评测记录时页面只提示去跑 `--dry-run`。检索为空、超时和成本还不在这张表里。
 - **本机 API**：`python -m backend.api` 在 `127.0.0.1:8000` 提供工具列表、trace、错题确认和复习卡片。配置 `STUDY_API_KEY` 后，`/v1` 要求 `X-API-Key`。页面仍直接读 SQLite。`copy_database` 可备份并恢复这个库。
 

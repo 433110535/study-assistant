@@ -231,6 +231,7 @@ class ReActStudyAgent(BaseAgent):
         steps = []
         final_answer = ""
         tools_used = []
+        rag_results = []
         total_iterations = 0
 
         for event in self.react_stream(user_input):
@@ -239,6 +240,8 @@ class ReActStudyAgent(BaseAgent):
             if event.event_type == ReActEventType.TOOL_CALL:
                 if event.tool_name not in tools_used:
                     tools_used.append(event.tool_name)
+            if event.event_type == ReActEventType.TOOL_RESULT and event.tool_name == "rag_search":
+                rag_results.append(event.tool_result)
 
             steps.append(ReActStep(
                 iteration=event.iteration,
@@ -258,6 +261,7 @@ class ReActStudyAgent(BaseAgent):
             steps=steps,
             total_iterations=total_iterations,
             tools_used=tools_used,
+            rag_results=rag_results,
             trace_id=getattr(self, "last_trace_id", ""),
         )
 

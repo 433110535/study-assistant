@@ -417,6 +417,31 @@ def dry_run(dataset: Dict[str, Any]) -> List[Dict[str, Any]]:
     return results
 
 
+def passages_from_rag_result(text: str) -> List[str]:
+    """从 rag_search 的返回里取出正文。没找到或检索失败时返回空列表。"""
+    raw = (text or "").strip()
+    if not raw or raw.startswith(("知识库未启用", "未在知识库中找到", "知识库检索失败")):
+        return []
+    passages = []
+    for part in raw.split("【资料")[1:]:
+        body = part.split("\n", 1)[1].strip() if "\n" in part else ""
+        if body:
+            passages.append(body)
+    return passages
+
+
+def score_live_answer(answer: str, rag_results: Optional[List[str]]) -> Dict[str, Any]:
+    """没调用检索时不打分。调用了就把回答和当次片段比较，没有片段则按空上下文记。"""
+    from backend.platform.faithfulness import score_faithfulness
+
+    if not rag_results:
+        return {"applicable": False, "score": None, "grounded": 0, "claims": 0}
+    contexts: List[str] = []
+    for item in rag_results:
+        contexts.extend(passages_from_rag_result(item))
+    return score_faithfulness(answer, contexts)
+
+
 def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[str, Any]]:
     from backend.agents.react_agent import ReActStudyAgent
 
@@ -427,6 +452,7 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
         agent.clear_history()
         outcome = agent.react(item["input"])
         judged = score_tool_selection(item["expected_tools"], outcome.tools_used)
+        scored = score_live_answer(outcome.final_answer, outcome.rag_results)
         results.append(
             {
                 "sample_id": item["id"],
@@ -434,6 +460,8 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
                 "tools_used": outcome.tools_used,
                 "detail": json.dumps(judged, ensure_ascii=False),
                 "output": outcome.final_answer,
+                "faithfulness": scored["score"],
+                "faithfulness_applicable": scored["applicable"],
             }
         )
     return results

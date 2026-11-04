@@ -167,6 +167,36 @@ class TestEvalRunner(unittest.TestCase):
             [{"tool": "read_image", "count": 1}],
         )
 
+    def test_live_faithfulness_uses_retrieved_passages_only(self):
+        from backend.platform.eval_runner import passages_from_rag_result, score_live_answer
+
+        raw = (
+            "【资料1】来源: 教材, 相似度: 80.0%\n"
+            "链式法则：先对最外层函数求导，再乘以内层函数的导数。\n\n"
+            "【资料2】来源: 笔记, 相似度: 60.0%\n"
+            "这条不会被引用。"
+        )
+        self.assertEqual(
+            passages_from_rag_result(raw),
+            [
+                "链式法则：先对最外层函数求导，再乘以内层函数的导数。",
+                "这条不会被引用。",
+            ],
+        )
+        self.assertEqual(passages_from_rag_result("未在知识库中找到相关内容。"), [])
+        grounded = score_live_answer(
+            "先对最外层函数求导，再乘以内层函数的导数。",
+            [raw],
+        )
+        self.assertTrue(grounded["applicable"])
+        self.assertEqual(grounded["score"], 1.0)
+        missed = score_live_answer("苹果是红色的水果。", ["未在知识库中找到相关内容。"])
+        self.assertTrue(missed["applicable"])
+        self.assertEqual(missed["score"], 0.0)
+        skipped = score_live_answer("直接回答，没有检索。", [])
+        self.assertFalse(skipped["applicable"])
+        self.assertIsNone(skipped["score"])
+
     def test_failure_board_is_empty_without_runs(self):
         from backend.platform.eval_runner import load_failure_board
 

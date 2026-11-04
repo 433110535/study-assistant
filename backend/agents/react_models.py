@@ -43,5 +43,6 @@ class ReActResult(BaseModel):
     steps: List[ReActStep] = []
     total_iterations: int = 0
     tools_used: List[str] = []
+    rag_results: List[str] = []
     success: bool = True
     trace_id: str = ""

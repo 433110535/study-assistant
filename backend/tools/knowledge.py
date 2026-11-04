@@ -4,7 +4,8 @@
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
-from backend.llm_helper import get_llm
+
+from backend.llm_helper import get_llm, text_content
 
 
 # 延迟加载 LLM 实例
@@ -78,7 +79,7 @@ def explain_concept(
             "subject": subject if subject else "通用",
             "level": level
         })
-        return response.content
+        return text_content(response.content)
     except Exception as e:
         return f"讲解失败: {str(e)}"
 
@@ -112,7 +113,7 @@ def break_down_concept(concept: str, llm=None) -> List[str]:
 
     try:
         response = chain.invoke({"concept": concept})
-        lines = response.content.split("\n")
+        lines = text_content(response.content).split("\n")
         return [line.strip().lstrip("0123456789.- ") for line in lines if line.strip()]
     except Exception as e:
         return [f"分解失败: {str(e)}"]
@@ -157,7 +158,7 @@ def compare_concepts(concept1: str, concept2: str, llm=None) -> str:
 
     try:
         response = chain.invoke({"concept1": concept1, "concept2": concept2})
-        return response.content
+        return text_content(response.content)
     except Exception as e:
         return f"比较失败: {str(e)}"
 

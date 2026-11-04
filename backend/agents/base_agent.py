@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.callbacks import BaseCallbackHandler
-from backend.llm_helper import get_llm
+from backend.llm_helper import get_llm, text_content
 from backend.config import (
     LLM_MODEL, LLM_TEMPERATURE, MAX_TOKENS
 )
@@ -94,9 +94,10 @@ class BaseAgent(ABC):
 
         # 更新历史
         self.add_to_history("user", user_input)
-        self.add_to_history("assistant", response.content)
+        answer = text_content(response.content)
+        self.add_to_history("assistant", answer)
 
-        return response.content
+        return answer
 
     def chat(self, user_input: str) -> str:
         """同步聊天方法"""
@@ -112,9 +113,10 @@ class BaseAgent(ABC):
 
         # 更新历史
         self.add_to_history("user", user_input)
-        self.add_to_history("assistant", response.content)
+        answer = text_content(response.content)
+        self.add_to_history("assistant", answer)
 
-        return response.content
+        return answer
 
     def chat_stream(self, user_input: str):
         """
@@ -134,8 +136,10 @@ class BaseAgent(ABC):
         # 流式输出
         full_response = ""
         for chunk in self.llm.stream(messages):
-            if hasattr(chunk, 'content'):
-                content = chunk.content
+            if hasattr(chunk, "content"):
+                content = text_content(chunk.content)
+                if not content:
+                    continue
                 full_response += content
                 yield content
 

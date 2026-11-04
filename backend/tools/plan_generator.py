@@ -5,8 +5,9 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 
 from langchain_core.prompts import ChatPromptTemplate
+
 from pydantic import BaseModel, Field
-from backend.llm_helper import get_llm
+from backend.llm_helper import get_llm, text_content
 
 
 # 延迟加载 LLM 实例
@@ -108,7 +109,7 @@ def generate_study_plan(
             "phase2_days": duration_days * 2 // 3,
             "phase2_days_plus_1": duration_days * 2 // 3 + 1
         })
-        return response.content
+        return text_content(response.content)
     except Exception as e:
         return f"生成计划失败: {str(e)}"
 

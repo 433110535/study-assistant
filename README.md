@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.41+-FF4B4B?logo=streamlit&logoColor=white)
-![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C3C)
+![LangChain](https://img.shields.io/badge/LangChain-1.7-1C3C3C)
 ![Qwen](https://img.shields.io/badge/LLM-Qwen--Max-615CED)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -105,7 +105,7 @@ flowchart LR
 |---|---|---|
 | 语言 | Python 3.11+ | 后端与前端同语言 |
 | 界面 | Streamlit | 多页面工作台 |
-| Agent | LangChain + 自研 ReAct | 流式与工具可视化 |
+| Agent | LangChain 1.7 + 自研 ReAct | `langchain-core` / `langchain-openai`，流式与工具可视化 |
 | 大模型 | Qwen-Max（DashScope） | Function Calling |
 | 视觉 | Qwen-VL（`VISION_MODEL`） | 题目识图 |
 | 向量检索 | FAISS + DashScope Embedding | 本地索引 |

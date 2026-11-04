@@ -15,6 +15,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from backend.agents.react_agent import ReActStudyAgent
+from backend.llm_helper import text_content
 from backend.agents.react_models import ReActResult, ReActStep, ReActEventType
 from backend.tools.knowledge import explain_concept, break_down_concept, compare_concepts
 from backend.tools.plan_generator import generate_study_plan, create_daily_schedule, generate_milestone_checklist
@@ -1341,7 +1342,7 @@ def render_quiz():
                                 "questions": st.session_state.last_quiz,
                                 "answers": user_answer,
                             })
-                            st.session_state.last_quiz_result = response.content
+                            st.session_state.last_quiz_result = text_content(response.content)
                             st.session_state.quiz_score_count = st.session_state.get('quiz_score_count', 0) + 1
                         except Exception as e:
                             st.error(f"批改失败: {str(e)}")
@@ -1849,7 +1850,7 @@ def render_kb():
 
                         chain = prompt | llm
                         response = chain.invoke({"query": rag_query, "context": context})
-                        answer = response.content
+                        answer = text_content(response.content)
 
                         # 保存结果到session_state
                         st.session_state.rag_history = {

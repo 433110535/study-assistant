@@ -9,6 +9,26 @@ from backend.config import (
 )
 
 
+def text_content(content) -> str:
+    """把模型返回收成字符串。LangChain 1.x 的 content 可能是字符串，也可能是内容块列表。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text") or block.get("content") or ""))
+            else:
+                text = getattr(block, "text", None)
+                parts.append(str(text) if text else "")
+        return "".join(parts)
+    return str(content)
+
+
 def get_llm(temperature: float = None, max_tokens: int = None):
     """
     获取通义千问 LLM 实例（带超时和重试）

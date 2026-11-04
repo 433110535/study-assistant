@@ -4,9 +4,10 @@
 from typing import List, Dict, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
+
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from backend.llm_helper import get_llm
+from backend.llm_helper import get_llm, text_content
 
 
 # 延迟加载 LLM 实例
@@ -94,7 +95,7 @@ def generate_questions(
             "count": count,
             "type_desc": type_instruction.get(question_type, type_instruction["mixed"])
         })
-        return response.content
+        return text_content(response.content)
     except Exception as e:
         return f"生成题目失败: {str(e)}"
 
@@ -150,7 +151,7 @@ def check_answer(
 
     try:
         response = chain.invoke({"question": question, "user_answer": user_answer})
-        return response.content
+        return text_content(response.content)
     except Exception as e:
         return f"检查答案失败: {str(e)}"
 

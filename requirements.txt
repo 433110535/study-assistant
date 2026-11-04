@@ -1,7 +1,9 @@
-# LangChain
-langchain-core>=0.3.24
-langchain-community>=0.3.11
-langchain-openai>=0.2.14
+# LangChain 1.x（2026-11：core 1.7.4，openai 集成 1.7.3）
+# 业务代码只用 langchain-core 与 langchain-openai，不引入 langchain 总包和 langgraph。
+langchain-core>=1.7.4,<2
+langchain-openai>=1.7.3,<2
+# 当前代码没有导入这个包。0.4 是它在 2026 年的主版本，和 core 1.7 配套。
+langchain-community>=0.4.2,<0.5
 
 # DashScope (Qwen)
 dashscope>=1.20.0

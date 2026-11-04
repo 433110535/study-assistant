@@ -12,6 +12,7 @@ from langchain_core.messages import (
 from backend.agents.base_agent import BaseAgent
 from backend.agents.react_models import ReActEvent, ReActEventType, ReActStep, ReActResult
 from backend.agents.react_tools import get_tool_schemas, execute_tool
+from backend.llm_helper import text_content
 from backend.platform.trace_store import TraceRun
 
 # FAISS 知识库
@@ -129,17 +130,18 @@ class ReActStudyAgent(BaseAgent):
                 streamed = ""
                 try:
                     for chunk in self.llm.stream(messages[:-1]):
-                        if chunk.content:
-                            streamed += chunk.content
+                        piece = text_content(chunk.content)
+                        if piece:
+                            streamed += piece
                             yield ReActEvent(
                                 event_type=ReActEventType.ANSWER_CHUNK,
-                                content=chunk.content,
+                                content=piece,
                                 iteration=iteration
                             )
                 except Exception as e:
-                    streamed = streamed or response.content or f"回答生成失败: {e}"
+                    streamed = streamed or text_content(response.content) or f"回答生成失败: {e}"
 
-                final_content = streamed or response.content
+                final_content = streamed or text_content(response.content)
                 yield ReActEvent(
                     event_type=ReActEventType.FINAL_ANSWER,
                     content=final_content,
@@ -198,11 +200,12 @@ class ReActStudyAgent(BaseAgent):
         streamed = ""
         try:
             for chunk in self.llm.stream(messages):
-                if chunk.content:
-                    streamed += chunk.content
+                piece = text_content(chunk.content)
+                if piece:
+                    streamed += piece
                     yield ReActEvent(
                         event_type=ReActEventType.ANSWER_CHUNK,
-                        content=chunk.content,
+                        content=piece,
                         iteration=iteration
                     )
         except Exception as e:
@@ -281,8 +284,9 @@ class ReActStudyAgent(BaseAgent):
         messages = self.format_messages(user_input)
         self.add_to_history("user", user_input)
         response = self.llm.invoke(messages)
-        self.add_to_history("assistant", response.content)
-        return response.content
+        answer = text_content(response.content)
+        self.add_to_history("assistant", answer)
+        return answer
 
     def chat_stream(self, user_input: str) -> Generator[str, None, None]:
         """普通流式对话（不带工具）"""
@@ -290,9 +294,12 @@ class ReActStudyAgent(BaseAgent):
         self.add_to_history("user", user_input)
         full_response = ""
         for chunk in self.llm.stream(messages):
-            if hasattr(chunk, 'content'):
-                full_response += chunk.content
-                yield chunk.content
+            if hasattr(chunk, "content"):
+                piece = text_content(chunk.content)
+                if not piece:
+                    continue
+                full_response += piece
+                yield piece
         self.add_to_history("assistant", full_response)
 
     def _build_messages(self, user_input: str) -> List:

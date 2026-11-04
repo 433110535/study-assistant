@@ -63,7 +63,7 @@
 - **主动复习**：页面外每天北京时间 8:00 生成卡片。未配置飞书和 SMTP 时只写本地发件箱。配齐 `SMTP_HOST`、`SMTP_FROM`、`REVIEW_EMAIL_TO` 后发邮件。`python -m backend.workers.review_reply --text 推到晚上` 可改期；`--serve` 只听 127.0.0.1，不是飞书回调。
 - **评测基线**：默认集 `eval/datasets/qa_baseline_v5.json` 共 100 条（v1–v4 仍保留）。`python -m backend.platform.eval_runner --dry-run` 不调用模型，会打工具选择，并对 16 条检索题用固定片段打忠实度。`--live` 才调用模型。调用了 `rag_search` 时，用当次检索正文打忠实度；没检索的题不记分。传入或算出的忠实度低于 0.85 会拦截。
 - **失败归因**：侧栏「失败归因」读取最近一次 `eval_runs`。工具没选对时按缺失工具计数；检索没有正文记为检索为空；忠实度低于 0.85 记为答案不忠实；工具返回里的「执行超时」记为超时。设置 `EVAL_MAX_COST_YUAN` 后，超过该费用才记为成本超限。
-- **本机 API**：`python -m backend.api` 在 `127.0.0.1:8000` 提供工具列表、trace、错题确认和复习卡片。配置 `STUDY_API_KEY` 后，`/v1` 要求 `X-API-Key`。失败归因页请求 `/v1/eval/latest`。错题页的列表、确认、丢弃、到期、改期和保存卡片都走本机 API；保存卡片不外发。`POST /v1/chat/stream` 用 SSE 流出问答事件，问答页目前仍直接调用 Agent。`copy_database` 可备份并恢复这个库。
+- **本机 API**：`python -m backend.api` 在 `127.0.0.1:8000` 提供工具列表、trace、错题确认和复习卡片。配置 `STUDY_API_KEY` 后，`/v1` 要求 `X-API-Key`。失败归因页请求 `/v1/eval/latest`。错题页的列表、确认、丢弃、到期、改期和保存卡片都走本机 API；保存卡片不外发。问答发送请求 `POST /v1/chat/stream`，并沿用页面上的同一个 Agent。`copy_database` 可备份并恢复这个库。
 
 ### 规划中
 

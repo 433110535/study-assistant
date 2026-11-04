@@ -298,6 +298,31 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(last["event_type"], "final_answer")
         self.assertEqual(last["content"], "你好")
 
+    def test_page_chat_stream_reuses_the_same_agent(self):
+        from backend.agents.react_models import ReActEvent, ReActEventType
+        from backend.api.local_client import iter_chat_events, parse_sse
+
+        parsed = parse_sse("data: {\"event_type\": \"thinking\", \"content\": \"想\"}\n\n")
+        self.assertEqual(parsed, [{"event_type": "thinking", "content": "想"}])
+
+        class Agent:
+            def __init__(self):
+                self.seen = ""
+
+            def react_stream(self, message: str):
+                self.seen = message
+                yield ReActEvent(
+                    event_type=ReActEventType.FINAL_ANSWER,
+                    content="好",
+                    iteration=1,
+                )
+
+        agent = Agent()
+        events = list(iter_chat_events("今天复习什么", agent_factory=lambda: agent))
+        self.assertEqual(agent.seen, "今天复习什么")
+        self.assertEqual(events[0]["event_type"], "final_answer")
+        self.assertEqual(events[0]["content"], "好")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

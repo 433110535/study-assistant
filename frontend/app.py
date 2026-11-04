@@ -16,7 +16,6 @@ sys.path.insert(0, str(project_root))
 
 from backend.agents.react_agent import ReActStudyAgent
 from backend.llm_helper import text_content
-from backend.agents.react_models import ReActResult, ReActStep, ReActEventType
 from backend.tools.knowledge import explain_concept, break_down_concept, compare_concepts
 from backend.tools.plan_generator import generate_study_plan, create_daily_schedule, generate_milestone_checklist
 from backend.tools.question_generator import generate_questions, check_answer
@@ -721,44 +720,52 @@ def _stream_answer(question: str):
         step_num = 0
         status_placeholder.markdown(loading_html("正在分析问题 · 判断是否需要检索"), unsafe_allow_html=True)
 
-        for event in st.session_state.agent.react_stream(question):
-            if event.event_type == ReActEventType.THINKING:
-                step_num += 1
-                status_placeholder.markdown(loading_html(f"第 {step_num} 步 · {event.content}"), unsafe_allow_html=True)
+        from backend.api.local_client import iter_chat_events
 
-            elif event.event_type == ReActEventType.TOOL_CALL:
+        for event in iter_chat_events(
+            question,
+            agent_factory=lambda: st.session_state.agent,
+        ):
+            kind = event.get("event_type")
+            if kind == "thinking":
                 step_num += 1
-                status_placeholder.markdown(loading_html(f"第 {step_num} 步 · 调用工具 {event.tool_name}"), unsafe_allow_html=True)
+                status_placeholder.markdown(loading_html(f"第 {step_num} 步 · {event.get('content') or ''}"), unsafe_allow_html=True)
+
+            elif kind == "tool_call":
+                step_num += 1
+                tool_name = event.get("tool_name") or ""
+                status_placeholder.markdown(loading_html(f"第 {step_num} 步 · 调用工具 {tool_name}"), unsafe_allow_html=True)
                 collected_steps.append({
                     "step": step_num,
                     "type": "tool_call",
-                    "tool": event.tool_name,
-                    "args": event.tool_args,
-                    "detail": f"调用工具: {event.tool_name}",
+                    "tool": tool_name,
+                    "args": event.get("tool_args") or {},
+                    "detail": f"调用工具: {tool_name}",
                 })
 
-            elif event.event_type == ReActEventType.TOOL_RESULT:
+            elif kind == "tool_result":
                 step_num += 1
-                status_placeholder.markdown(loading_html(f"第 {step_num} 步 · 获取 {event.tool_name} 结果"), unsafe_allow_html=True)
+                tool_name = event.get("tool_name") or ""
+                status_placeholder.markdown(loading_html(f"第 {step_num} 步 · 获取 {tool_name} 结果"), unsafe_allow_html=True)
                 collected_steps.append({
                     "step": step_num,
                     "type": "tool_result",
-                    "tool": event.tool_name,
-                    "detail": f"获取结果: {event.content[:80]}",
+                    "tool": tool_name,
+                    "detail": f"获取结果: {(event.get('content') or '')[:80]}",
                 })
 
-            elif event.event_type == ReActEventType.ANSWER_CHUNK:
-                full_response += event.content
+            elif kind == "answer_chunk":
+                full_response += event.get("content") or ""
                 status_placeholder.empty()
                 answer_placeholder.markdown(prepare_markdown(full_response))
 
-            elif event.event_type == ReActEventType.FINAL_ANSWER:
-                full_response = event.content
+            elif kind == "final_answer":
+                full_response = event.get("content") or ""
                 status_placeholder.empty()
                 answer_placeholder.markdown(prepare_markdown(full_response))
 
-            elif event.event_type == ReActEventType.ERROR:
-                status_placeholder.error(event.content)
+            elif kind == "error":
+                status_placeholder.error(event.get("content") or "")
 
         if collected_steps:
             with steps_placeholder.expander("推理过程 · REASONING TRACE", expanded=False):
@@ -817,7 +824,7 @@ def _render_saved_chats() -> None:
 
 def render_qa():
     page_header("qa", chips=[
-        "<b>模式</b> ReAct · 流式",
+        "<b>模式</b> /v1/chat/stream",
         "<b>感知</b> 拍照识题 · VL",
         "<b>推理</b> 工具调用可追溯",
     ])

@@ -1,9 +1,10 @@
 """页面通过 ASGI 调用本机 API，不另开端口。"""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 
 def request_json(
@@ -33,6 +34,42 @@ def request_json(
     if response.status_code >= 400:
         raise RuntimeError(f"{method} {path} -> {response.status_code}: {response.text}")
     return response.json()
+
+
+def parse_sse(payload: str) -> list:
+    """读出 SSE 正文里的 data 行。空行和别的字段忽略。"""
+    events = []
+    for line in payload.splitlines():
+        if not line.startswith("data: "):
+            continue
+        events.append(json.loads(line[len("data: ") :]))
+    return events
+
+
+def iter_chat_events(
+    message: str,
+    agent_factory: Optional[Callable[[], Any]] = None,
+    db_path: Optional[Path] = None,
+) -> Iterator[Dict[str, Any]]:
+    """向 /v1/chat/stream 取事件。传入 agent_factory 时沿用那个 Agent。"""
+    from fastapi.testclient import TestClient
+
+    from backend.api.app import create_app
+
+    key = os.getenv("STUDY_API_KEY", "").strip()
+    app = create_app(db_path, api_key=key, agent_factory=agent_factory)
+    headers = {"X-API-Key": key} if key else {}
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/stream",
+            json={"message": message},
+            headers=headers,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"POST /v1/chat/stream -> {response.status_code}: {response.text}"
+        )
+    yield from parse_sse(response.text)
 
 
 def failure_board(db_path: Optional[Path] = None) -> Dict[str, Any]:

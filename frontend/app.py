@@ -230,6 +230,42 @@ def init_session_state():
     if 'knowledge_base' not in st.session_state:
         st.session_state.knowledge_base = []
 
+    _restore_chat_session()
+
+
+def _restore_chat_session() -> None:
+    """登录后恢复该用户最近一次问答，刷新页面不丢记录。"""
+    if st.session_state.get("chat_session_id"):
+        return
+    if not st.session_state.get("initialized"):
+        return
+    user_id = st.session_state.get("auth_user") or "student"
+    try:
+        from backend.platform.chat_store import ensure_session, load_messages
+
+        session_id = ensure_session(user_id)
+        messages = load_messages(session_id)
+    except Exception:
+        return
+    st.session_state.chat_session_id = session_id
+    st.session_state.messages = messages
+    agent = st.session_state.get("agent")
+    if agent is not None:
+        agent.session_id = session_id
+        agent.chat_history = [dict(item) for item in messages]
+
+
+def _persist_message(role: str, content: str) -> None:
+    session_id = st.session_state.get("chat_session_id")
+    if not session_id:
+        return
+    try:
+        from backend.platform.chat_store import append_message
+
+        append_message(session_id, role, content)
+    except Exception:
+        pass
+
 
 def clear_session_data():
     """清空所有会话派生的界面状态（保留持久化向量索引）。"""
@@ -272,6 +308,17 @@ def clear_session_data():
     agent = st.session_state.get("agent")
     if agent is not None:
         agent.clear_history()
+    user_id = st.session_state.get("auth_user") or "student"
+    try:
+        from backend.platform.chat_store import start_session
+
+        session_id = start_session(user_id)
+        st.session_state.chat_session_id = session_id
+        st.session_state.messages = []
+        if agent is not None:
+            agent.session_id = session_id
+    except Exception:
+        st.session_state.pop("chat_session_id", None)
 
 
 def credentials_valid(username: str, password: str) -> bool:
@@ -433,8 +480,8 @@ def render_sidebar():
             if st.session_state.get("confirm_clear"):
                 st.markdown(
                     '<div class="confirm-box">'
-                    '<b>确认清空本次会话？</b>'
-                    '<span>问答、讲解、计划与练习记录将全部删除，且不可恢复。</span>'
+                    '<b>确认开启新会话？</b>'
+                    '<span>当前页面上的问答、讲解、计划与练习会清空。已保存的问答仍留在本机数据库。</span>'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -449,7 +496,7 @@ def render_sidebar():
                         clear_session_data()
                         st.rerun()
             else:
-                if st.button("清空本次会话", key="clear_session_btn", use_container_width=True):
+                if st.button("开启新会话", key="clear_session_btn", use_container_width=True):
                     st.session_state.confirm_clear = True
                     st.rerun()
 
@@ -687,6 +734,7 @@ def _stream_answer(question: str):
         answer_placeholder.markdown(prepare_markdown(full_response))
 
         st.session_state.messages.append({"role": "assistant", "content": full_response})
+        _persist_message("assistant", full_response)
         st.session_state.last_react_result = {
             "user_input": question,
             "final_answer": full_response,
@@ -703,6 +751,7 @@ def _stream_answer(question: str):
         error_msg = f"发生错误: {str(e)}"
         st.error(error_msg)
         st.session_state.messages.append({"role": "assistant", "content": error_msg})
+        _persist_message("assistant", error_msg)
 
         if "API" in str(e) or "key" in str(e):
             st.info("提示：请检查 .env 文件中的 API Key 配置")
@@ -769,6 +818,7 @@ def render_qa():
 
         if clicked_prompt:
             st.session_state.messages.append({"role": "user", "content": clicked_prompt})
+            _persist_message("user", clicked_prompt)
             st.session_state.qa_pending = clicked_prompt
             st.rerun()
 
@@ -844,6 +894,7 @@ def render_qa():
                     ocr_override=st.session_state.get("qa_ocr_override", ""),
                 )
                 st.session_state.messages.append({"role": "user", "content": display})
+                _persist_message("user", display)
                 st.session_state.qa_pending = agent_input
                 st.rerun()
 

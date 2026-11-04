@@ -58,12 +58,13 @@
 - **运行 trace（SQLite）**：每次问答 run 与 tool_call 写入 `data/app.db`，为评测与中台打地基。
 - **问答持久化**：同一账号的最近一次对话写入本机 SQLite，刷新页面后恢复；「开启新会话」只清空当前界面，不删除旧记录。
 - **错题本（待确认）**：`save_mistake` 只写入待确认记录，在「错题本」页面确认后才进入次日复习。
-- **评测基线**：`eval/datasets/qa_baseline_v1.json` 含 40 条固定问题。`python -m backend.platform.eval_runner --dry-run` 只校验工具是否已注册；`--live` 才会调用模型并统计工具选择是否覆盖预期。
+- **代码助教（本机沙箱）**：代码助教页可运行学生代码和 `assert` 测试。失败时按 1–3 级提示，不直接给改正后的完整代码。问答里对应工具为 `run_code`、`run_tests`、`explain_traceback`、`hint_level`。当前是进程隔离，不是容器，不要暴露到公网。
+- **评测基线**：`eval/datasets/qa_baseline_v2.json` 含 50 条固定问题（v1 仍保留）。`python -m backend.platform.eval_runner --dry-run` 只校验工具是否已注册，并通过工具选择门禁；`--live` 才会调用模型。门禁尚未检查忠实度。
 
 ### 规划中
 
 - 拍照批改闭环（判分、错因归类、变式题；错题待确认写入已具备）
-- 代码执行助教（沙箱 + 测试用例）
+- 代码助教的容器隔离、内存上限，以及改完再跑的多轮记录
 - 主动复习推送（独立 Worker + SM-2）
 - 数据中台 / 评测中台（发布门禁、线上抽样、服务化）
 
@@ -108,7 +109,7 @@ flowchart LR
 | 视觉 | Qwen-VL（`VISION_MODEL`） | 题目识图 |
 | 向量检索 | FAISS + DashScope Embedding | 本地索引 |
 | 持久化 | SQLite（`data/app.db`） | run / tool_call trace |
-| 评测 | 规划中（Ragas / promptfoo） | 离线门禁 |
+| 评测 | 自建 runner + 工具选择门禁 | 50 条基线；忠实度未接入 |
 
 ---
 
@@ -169,7 +170,7 @@ python -m backend.platform.eval_runner --dry-run
 study-assistant/
 ├── backend/
 │   ├── agents/          # ReAct、工具注册表、事件模型
-│   ├── tools/             # 讲解、计划、出题、vision.py
+│   ├── tools/             # 讲解、计划、出题、vision.py、code_sandbox.py
 │   ├── knowledge/         # PDF、FAISS
 │   ├── platform/          # trace_store（SQLite）
 │   ├── config.py
@@ -214,11 +215,11 @@ study-assistant/
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | 开源仓库、README、架构文档 | 已完成 |
-| P1 | 工具注册表、SQLite trace、拍照识题初版 | **进行中** |
-| P2 | 错题本 + 拍照批改闭环 | 规划中 |
-| P3 | 代码执行助教 | 规划中 |
+| P1 | 工具注册表、SQLite trace、拍照识题初版 | 初步完成 |
+| P2 | 错题本 + 拍照批改闭环 | 错题待确认已有，批改未做 |
+| P3 | 代码执行助教 | 本机沙箱已接入，容器未做 |
 | P4 | 主动复习与推送 | 规划中 |
-| P5 | 评测 runner、门禁、FastAPI 服务化 | 规划中 |
+| P5 | 评测 runner、门禁、FastAPI 服务化 | runner 与工具选择门禁已有，服务化未做 |
 
 ---
 

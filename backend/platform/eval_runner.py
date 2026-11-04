@@ -17,7 +17,11 @@ from typing import Any, Dict, List, Optional
 from backend.config import BASE_DIR, TRACE_DB_PATH
 from backend.platform.trace_store import _connect, init_trace_db
 
-DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v1.json"
+DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v2.json"
+
+# 发布门禁目前只检查工具选择。忠实度、注入、成本尚未接入。
+GATE_MIN_ACCURACY = 0.90
+GATE_MAX_DROP = 0.03
 
 
 def _utc_now() -> str:
@@ -157,6 +161,34 @@ def save_eval_run(
     return run_id
 
 
+def check_release_gate(
+    accuracy: float,
+    baseline_accuracy: Optional[float] = None,
+) -> Dict[str, Any]:
+    """工具选择门禁。准确率低于 90%，或较基线下跌超过 3 个百分点，即失败。"""
+    reasons = []
+    if accuracy + 1e-9 < GATE_MIN_ACCURACY:
+        reasons.append(
+            f"工具选择准确率 {accuracy:.2%} 低于 {GATE_MIN_ACCURACY:.0%}"
+        )
+    if (
+        baseline_accuracy is not None
+        and baseline_accuracy - accuracy > GATE_MAX_DROP + 1e-9
+    ):
+        reasons.append(
+            f"工具选择准确率 {accuracy:.2%} 比基线 {baseline_accuracy:.2%} "
+            f"下降超过 {GATE_MAX_DROP:.0%}"
+        )
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "accuracy": accuracy,
+        "baseline_accuracy": baseline_accuracy,
+        "checked": ["tool_selection"],
+        "not_checked": ["faithfulness", "pii", "injection", "iterations", "cost"],
+    }
+
+
 def dry_run(dataset: Dict[str, Any]) -> List[Dict[str, Any]]:
     unknown = validate_against_registry(dataset)
     if unknown:
@@ -212,10 +244,17 @@ def main() -> None:
         mode = "dry-run"
     run_id = save_eval_run(dataset, mode, results)
     passed = sum(1 for item in results if item["passed"])
+    accuracy = passed / len(results) if results else 0.0
+    gate = check_release_gate(accuracy)
     print(
         f"[{mode}] {dataset['name']}@{dataset['version']} "
         f"{passed}/{len(results)} 通过，eval_run={run_id}"
     )
+    if gate["passed"]:
+        print("门禁通过（仅工具选择；忠实度等指标未检查）")
+    else:
+        print("门禁未通过: " + "；".join(gate["reasons"]))
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

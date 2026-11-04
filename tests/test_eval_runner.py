@@ -13,7 +13,8 @@ class TestEvalRunner(unittest.TestCase):
         from backend.platform.eval_runner import load_dataset, validate_against_registry
 
         dataset = load_dataset()
-        self.assertGreaterEqual(len(dataset["samples"]), 40)
+        self.assertGreaterEqual(len(dataset["samples"]), 50)
+        self.assertEqual(dataset.get("version"), "v2")
         self.assertEqual(validate_against_registry(dataset), [])
 
     def test_score_requires_expected_tools(self):
@@ -37,6 +38,20 @@ class TestEvalRunner(unittest.TestCase):
         run_id = save_eval_run(dataset, "dry-run", results, db_path=db)
         self.assertTrue(run_id)
         self.assertEqual(sum(1 for item in results if item["passed"]), len(results))
+
+    def test_gate_blocks_degraded_accuracy(self):
+        from backend.platform.eval_runner import check_release_gate
+
+        below = check_release_gate(0.85)
+        self.assertFalse(below["passed"])
+        self.assertTrue(below["reasons"])
+
+        dropped = check_release_gate(0.96, baseline_accuracy=1.0)
+        self.assertFalse(dropped["passed"])
+
+        held = check_release_gate(0.98, baseline_accuracy=1.0)
+        self.assertTrue(held["passed"])
+        self.assertIn("faithfulness", held["not_checked"])
 
 
 if __name__ == "__main__":

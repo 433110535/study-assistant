@@ -10,7 +10,7 @@
     3. FAISS 向量库增删查 + 落盘 / 加载
     4. PDF 解析
     5. 现有知识库索引加载
-    6. Streamlit 前端 9 个页面渲染
+    6. Streamlit 前端各页面渲染
 """
 import shutil
 import sys
@@ -54,6 +54,7 @@ class TestDependencies(unittest.TestCase):
             "backend.tools.plan_generator",
             "backend.tools.question_generator",
             "backend.tools.vision",
+            "backend.tools.code_sandbox",
             "backend.agents.tool_registry",
             "backend.platform.trace_store",
         ]
@@ -171,7 +172,7 @@ class TestFrontend(unittest.TestCase):
 
     PAGES = [
         "dashboard", "qa", "react_viz", "knowledge", "compare",
-        "planner", "daily", "quiz", "kb", "mistakes",
+        "planner", "daily", "quiz", "kb", "mistakes", "code",
     ]
 
     def test_pages_render(self):
@@ -181,6 +182,8 @@ class TestFrontend(unittest.TestCase):
         for page in self.PAGES:
             with self.subTest(page=page):
                 at = AppTest.from_file(app, default_timeout=120)
+                at.session_state["authenticated"] = True
+                at.session_state["auth_user"] = "student"
                 at.session_state["current_page"] = page
                 at.run()
                 errors = [str(e.value) for e in at.exception]

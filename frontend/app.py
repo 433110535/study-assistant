@@ -120,6 +120,7 @@ PAGES = [
     ("quiz", "08", "PRACTICE", "习题练习", "出题与批改"),
     ("kb", "09", "KNOWLEDGE BASE", "向量知识库", "RAG 检索"),
     ("mistakes", "10", "MISTAKES", "错题本", "确认后进入复习"),
+    ("code", "11", "CODE", "代码助教", "沙箱运行与分级提示"),
 ]
 PAGE_META = {page[0]: page[1:] for page in PAGES}
 
@@ -294,6 +295,11 @@ def clear_session_data():
         "qa_pending",
         "qa_image_upload",
         "qa_ocr_override",
+        "code_tutor_result",
+        "code_tutor_source",
+        "code_tutor_tests",
+        "code_tutor_timeout",
+        "code_tutor_level",
         "rag_history",
         "daily_schedule",
         "schedule_topics",
@@ -449,7 +455,7 @@ def render_sidebar():
             st.stop()
 
         st.markdown(
-            '<div class="rail-label"><span>Workspace</span><span>10 modules</span></div>',
+            '<div class="rail-label"><span>Workspace</span><span>11 modules</span></div>',
             unsafe_allow_html=True,
         )
 
@@ -1803,6 +1809,99 @@ def render_kb():
             st.warning("提示：知识库为空，请先上传PDF文档")
 
 
+def render_code_tutor():
+    """代码助教：本机沙箱跑代码和测试，失败时只给分级提示。"""
+    from backend.tools.code_sandbox import (
+        format_run_result,
+        hint_for_level,
+        record_code_run,
+        run_student_code,
+    )
+
+    page_header("code", chips=[
+        "<b>隔离</b> 独立进程",
+        "<b>教学</b> 先提示后答案",
+    ])
+    st.caption(
+        "在本机沙箱里运行 Python。禁止读写文件、启动子进程和联网。"
+        "失败时只解释错误并按级别给提示，不直接给出改正后的完整代码。"
+        "这是进程隔离，不是容器，不要把本页暴露到公网。"
+    )
+
+    section_head("01", "代码与测试", "RUN")
+    code = st.text_area(
+        "学生代码",
+        height=220,
+        key="code_tutor_source",
+        placeholder="def add(a, b):\n    return a + b",
+    )
+    tests = st.text_area(
+        "测试用例（可留空）",
+        height=120,
+        key="code_tutor_tests",
+        placeholder="assert add(1, 2) == 3",
+    )
+    timeout = st.slider(
+        "超时（秒）",
+        min_value=1,
+        max_value=5,
+        value=2,
+        key="code_tutor_timeout",
+    )
+    if st.button("运行", type="primary", key="code_tutor_run"):
+        result = run_student_code(code, tests=tests, timeout_s=float(timeout))
+        st.session_state["code_tutor_result"] = result
+        record_code_run(
+            st.session_state.get("auth_user") or "student",
+            code,
+            tests,
+            result,
+        )
+
+    result = st.session_state.get("code_tutor_result")
+    if not result:
+        empty_state(
+            "SANDBOX",
+            "还没有运行记录",
+            "贴上代码，可选地写几条 assert，然后运行。失败时只会给出分级提示。",
+        )
+        return
+
+    status = result.get("status") or "error"
+    labels = {
+        "passed": "通过",
+        "failed": "未通过",
+        "rejected": "被沙箱拒绝",
+        "timeout": "超时",
+        "error": "运行器错误",
+    }
+    section_head("02", "运行结果", "RESULT")
+    st.markdown(f"**{labels.get(status, status)}**")
+    if result.get("exception_type"):
+        st.text(f"{result['exception_type']}: {result.get('exception_message') or ''}")
+        if result.get("line"):
+            st.caption(f"行号 {result['line']}")
+    st.markdown("标准输出")
+    st.code(result.get("stdout") or "（空）", language="text")
+    if result.get("stderr"):
+        st.markdown("标准错误")
+        st.code(result.get("stderr"), language="text")
+
+    if status == "passed":
+        return
+
+    section_head("03", "分级提示", "HINT")
+    observation = format_run_result(result)
+    level = st.radio(
+        "提示级别",
+        options=[1, 2, 3],
+        horizontal=True,
+        key="code_tutor_level",
+        format_func=lambda n: {1: "1 只说类别", 2: "2 指出行号", 3: "3 检查方向"}[n],
+    )
+    st.text(hint_for_level(level, observation))
+
+
 def render_mistakes():
     """错题本：Agent 写入的记录需人工确认后才进入复习。"""
     from backend.platform.mistake_store import (
@@ -2012,6 +2111,8 @@ def main():
             render_kb()
         elif page == 'mistakes':
             render_mistakes()
+        elif page == 'code':
+            render_code_tutor()
         elif page == 'react_viz':
             render_react_visualization()
 

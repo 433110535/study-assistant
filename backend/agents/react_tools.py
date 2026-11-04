@@ -99,6 +99,30 @@ def _execute_read_image(agent, image_path: str, focus: str = "全部") -> str:
     return read_image(image_path, focus=focus)
 
 
+def _execute_run_code(agent, code: str, timeout_s: int = 2) -> str:
+    from backend.tools.code_sandbox import format_run_result, run_student_code
+
+    return format_run_result(run_student_code(code, timeout_s=timeout_s))
+
+
+def _execute_run_tests(agent, code: str, tests: str, timeout_s: int = 2) -> str:
+    from backend.tools.code_sandbox import format_run_result, run_student_code
+
+    return format_run_result(run_student_code(code, tests=tests, timeout_s=timeout_s))
+
+
+def _execute_explain_traceback(agent, observation: str) -> str:
+    from backend.tools.code_sandbox import explain_traceback
+
+    return explain_traceback(observation)
+
+
+def _execute_hint_level(agent, level: int = 1, observation: str = "") -> str:
+    from backend.tools.code_sandbox import hint_for_level
+
+    return hint_for_level(level, observation)
+
+
 # ========== 注册工具 ==========
 
 def _register_all_tools() -> None:
@@ -310,6 +334,133 @@ def _register_all_tools() -> None:
             side_effects=True,
             requires_approval=True,
             cost_hint="sqlite:1 写",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="run_code",
+            fn=_execute_run_code,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "run_code",
+                    "description": (
+                        "在本机沙箱中运行学生的 Python 代码，返回标准输出或异常。"
+                        "用户贴出代码、要求运行或排查报错时使用。不要用它执行文件、网络或系统命令。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string", "description": "要运行的 Python 源码"},
+                            "timeout_s": {
+                                "type": "integer",
+                                "description": "超时秒数，1 到 5",
+                                "default": 2,
+                            },
+                        },
+                        "required": ["code"],
+                    },
+                },
+            },
+            side_effects=False,
+            timeout_s=15,
+            cost_hint="sandbox:local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="run_tests",
+            fn=_execute_run_tests,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "run_tests",
+                    "description": (
+                        "在沙箱中先运行学生代码，再运行测试断言。"
+                        "用户给出了测试、assert，或要求判断对错时使用。失败后不要直接改写完整答案。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string", "description": "学生的函数或脚本"},
+                            "tests": {
+                                "type": "string",
+                                "description": "断言或其他检查代码，例如 assert add(1, 2) == 3",
+                            },
+                            "timeout_s": {
+                                "type": "integer",
+                                "description": "超时秒数，1 到 5",
+                                "default": 2,
+                            },
+                        },
+                        "required": ["code", "tests"],
+                    },
+                },
+            },
+            side_effects=False,
+            timeout_s=15,
+            cost_hint="sandbox:local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="explain_traceback",
+            fn=_execute_explain_traceback,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "explain_traceback",
+                    "description": (
+                        "把 run_code 或 run_tests 的失败结果翻译成学生能读的说明。"
+                        "只解释错误，不生成改正后的代码。运行失败后、给提示之前调用。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "observation": {
+                                "type": "string",
+                                "description": "上一次运行工具返回的原文",
+                            },
+                        },
+                        "required": ["observation"],
+                    },
+                },
+            },
+            cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="hint_level",
+            fn=_execute_hint_level,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "hint_level",
+                    "description": (
+                        "按教学级别生成允许说出的提示。默认 level=1。"
+                        "用户要求再具体一点时升到 2 或 3。任何级别都不要附上修改后的完整代码，"
+                        "除非用户明确说「给我答案」并且已经给过至少一次提示。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "level": {
+                                "type": "integer",
+                                "description": "1 只说类别，2 加行号和异常原文，3 再加一句检查方向",
+                                "default": 1,
+                            },
+                            "observation": {
+                                "type": "string",
+                                "description": "上一次运行工具返回的原文",
+                                "default": "",
+                            },
+                        },
+                        "required": ["level"],
+                    },
+                },
+            },
+            cost_hint="local",
         )
     )
 

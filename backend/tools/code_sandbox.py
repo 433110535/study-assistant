@@ -1,8 +1,8 @@
 """
 本机代码沙箱。
 
-独立进程 + 导入白名单 + 审计钩子（禁写文件、禁子进程、禁联网）+ 超时。
-没有容器，也没有内存上限，只适合本机教学，不要对公网开放。
+独立进程 + 导入白名单 + 审计钩子（禁写文件、禁子进程、禁联网）+ 超时 + 内存上限。
+没有容器，只适合本机教学，不要对公网开放。
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ MAX_OUTPUT_CHARS = 4_000
 DEFAULT_TIMEOUT_S = 2.0
 MIN_TIMEOUT_S = 0.5
 MAX_TIMEOUT_S = 5.0
+# 子进程提交内存上限。Windows 没有 resource，由沙箱进程用 Job Object 生效。
+MAX_MEMORY_BYTES = 64 * 1024 * 1024
 
 ALLOWED_MODULES = frozenset(
     {
@@ -211,6 +213,7 @@ _CATEGORIES = {
     "IndentationError": "缩进错误",
     "IndexError": "下标越界",
     "KeyError": "字典里没有这个键",
+    "MemoryError": "超过内存上限",
     "NameError": "用到了还没有定义的名字",
     "PermissionError": "试图访问文件、进程或网络",
     "RecursionError": "递归没有停下来",
@@ -228,6 +231,7 @@ _DIRECTIONS = {
     "IndentationError": "检查冒号下一行是否多缩进了一级，以及同一块是否对齐。",
     "IndexError": "检查下标是否落在序列长度之内，包括空序列。",
     "KeyError": "检查这个键是否已经放进字典，大小写是否一致。",
+    "MemoryError": "检查循环里是否在不断拼接字符串，或不断把大块数据放进列表。",
     "NameError": "检查名字是否写错，以及是否先定义再使用。",
     "PermissionError": "去掉文件、系统命令和网络相关的调用，只保留计算逻辑。",
     "RecursionError": "检查递归是否会走到终止条件，以及终止条件是否写反。",
@@ -410,6 +414,7 @@ def run_student_code(
         "allowed": sorted(ALLOWED_MODULES),
         "safe_builtins": list(SAFE_BUILTIN_NAMES),
         "max_output": MAX_OUTPUT_CHARS,
+        "memory_bytes": MAX_MEMORY_BYTES,
     }
     creationflags = 0
     if sys.platform == "win32":
@@ -463,6 +468,12 @@ def run_student_code(
 
         if not result_path.is_file():
             detail = (completed.stderr or completed.stdout or "沙箱没有返回结果").strip()
+            if "MemoryError" in detail or "内存上限" in detail:
+                return _empty_result(
+                    "memory",
+                    f"超过 {MAX_MEMORY_BYTES // (1024 * 1024)}MB 内存上限",
+                    "MemoryError",
+                )
             return _empty_result("error", detail[:500], "RuntimeError")
 
         try:
@@ -537,6 +548,8 @@ def explain_traceback(text: str) -> str:
         return "这次运行没有异常。"
     if status == "timeout" or info["exception_type"] == "TimeoutError":
         return "程序在时限内没有结束。通常是循环停不下来，或递归没有走到终止条件。这里只说明现象，不给出改正后的代码。"
+    if status == "memory" or info["exception_type"] == "MemoryError":
+        return "程序超过了内存上限。通常是列表、字符串或大块数据一直变大。这里只说明现象，不给出改正后的代码。"
     if status == "rejected":
         reason = info["exception_message"] or "使用了不允许的操作"
         return f"代码在运行前被沙箱拒绝：{reason}。请改成普通计算后再运行。"
@@ -560,6 +573,8 @@ def hint_for_level(level: int = 1, observation: str = "") -> str:
     kind = info["exception_type"]
     if info["status"] == "timeout":
         kind = "TimeoutError"
+    if info["status"] == "memory":
+        kind = "MemoryError"
     if info["status"] == "rejected":
         message = info["exception_message"] or ""
         kind = "ImportError" if "不允许导入" in message else "PermissionError"

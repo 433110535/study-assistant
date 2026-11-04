@@ -2,6 +2,7 @@
 沙箱子进程入口。只应由 code_sandbox 启动，不要单独当工具调用。
 
 学生代码在受限 builtins 下执行。审计钩子拦截写文件、子进程和网络连接。
+进入学生代码之前设置内存上限：Windows 用 Job Object，其他系统用 resource。
 """
 from __future__ import annotations
 
@@ -91,10 +92,177 @@ def _install_audit(result_path: str) -> None:
     sys.addaudithook(_audit)
 
 
+# 持有 Job 句柄。被回收后上限会消失，KILL_ON_JOB_CLOSE 还可能直接结束进程。
+_MEMORY_JOB = None
+
+
+def _memory_message(limit: int) -> str:
+    mb = max(1, int(limit) // (1024 * 1024))
+    return f"超过 {mb}MB 内存上限"
+
+
+def _vm_size_bytes() -> int:
+    try:
+        with open("/proc/self/status", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("VmSize:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        return 0
+    return 0
+
+
+def _windows_memory_limit(limit: int) -> None:
+    """用 Job Object 限制本进程可提交的内存。resource 在 Windows 上不可用。"""
+    global _MEMORY_JOB
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    job_extended = 9
+    process_memory = 0x00000100
+    job_memory = 0x00000200
+    kill_on_close = 0x00002000
+
+    class _BasicLimit(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _ExtendedLimit(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _BasicLimit),
+            ("IoInfo", _IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError(f"CreateJobObject 失败（{ctypes.get_last_error()}）")
+    info = _ExtendedLimit()
+    info.BasicLimitInformation.LimitFlags = process_memory | job_memory | kill_on_close
+    info.ProcessMemoryLimit = limit
+    info.JobMemoryLimit = limit
+    if not kernel32.SetInformationJobObject(
+        job,
+        job_extended,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        err = ctypes.get_last_error()
+        kernel32.CloseHandle(job)
+        raise OSError(f"SetInformationJobObject 失败（{err}）")
+    if not kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess()):
+        err = ctypes.get_last_error()
+        kernel32.CloseHandle(job)
+        raise OSError(f"AssignProcessToJobObject 失败（{err}）")
+    _MEMORY_JOB = job
+
+
+def _posix_memory_limit(limit: int) -> None:
+    """限制地址空间。解释器当前占用已经接近上限时，改为再给同样一段。"""
+    import resource
+
+    vsize = _vm_size_bytes()
+    if vsize > 0 and vsize + 16 * 1024 * 1024 >= limit:
+        cap = vsize + limit
+    else:
+        cap = limit
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    except (ValueError, OSError):
+        cap = max(vsize, limit) + limit
+        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+
+
+def _apply_memory_limit(limit: int) -> None:
+    if limit <= 0:
+        raise OSError("内存上限无效")
+    if sys.platform == "win32":
+        _windows_memory_limit(limit)
+        return
+    if not sys.platform.startswith(("linux", "darwin", "freebsd")):
+        raise OSError("当前系统无法设置子进程内存上限")
+    _posix_memory_limit(limit)
+
+
+def _blank_result(status: str, message: str, exception_type: str) -> dict:
+    return {
+        "status": status,
+        "stdout": "",
+        "stderr": "",
+        "exception_type": exception_type,
+        "exception_message": message[:500],
+        "line": None,
+        "truncated": False,
+    }
+
+
+def _write_result(path: str, result: dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(result, handle, ensure_ascii=False)
+    except MemoryError:
+        message = str(result.get("exception_message") or "超过内存上限").replace('"', "")
+        body = (
+            '{"status":"memory","stdout":"","stderr":"",'
+            f'"exception_type":"MemoryError","exception_message":"{message}",'
+            '"line":null,"truncated":false}'
+        )
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body)
+
+
 def main() -> None:
     policy_path, student_path, tests_path, result_path = sys.argv[1:5]
     with open(policy_path, encoding="utf-8") as handle:
         policy = json.load(handle)
+    memory_bytes = int(policy.get("memory_bytes") or 0)
+    try:
+        _apply_memory_limit(memory_bytes)
+    except Exception as exc:
+        _write_result(
+            result_path,
+            _blank_result("error", f"无法设置内存上限：{exc}", "RuntimeError"),
+        )
+        return
     allowed = set(policy["allowed"])
     safe_names = list(policy["safe_builtins"])
     max_output = int(policy.get("max_output", 4000))
@@ -142,6 +310,18 @@ def main() -> None:
             exec(student_code, globs, globs)
         if tests_code is not None:
             exec(tests_code, globs, globs)
+    except MemoryError as exc:
+        result["status"] = "memory"
+        result["exception_type"] = "MemoryError"
+        result["exception_message"] = _memory_message(memory_bytes)
+        try:
+            result["line"] = _student_line(exc)
+        except Exception:
+            result["line"] = None
+        # 先松开学生代码占住的大块内存，结果文件才写得进去。
+        exc.__traceback__ = None
+        del exc
+        globs.clear()
     except BaseException as exc:
         result["status"] = "failed"
         result["exception_type"] = type(exc).__name__
@@ -149,11 +329,19 @@ def main() -> None:
         result["line"] = _student_line(exc)
         stderr.write(traceback.format_exc(limit=8))
 
-    result["stdout"] = stdout.getvalue()
-    result["stderr"] = stderr.getvalue()
-    result["truncated"] = bool(stdout.truncated or stderr.truncated)
-    with open(result_path, "w", encoding="utf-8") as handle:
-        json.dump(result, handle, ensure_ascii=False)
+    try:
+        result["stdout"] = stdout.getvalue()
+        result["stderr"] = stderr.getvalue()
+        result["truncated"] = bool(stdout.truncated or stderr.truncated)
+    except MemoryError:
+        result["stdout"] = ""
+        result["stderr"] = ""
+        result["truncated"] = False
+        if result.get("status") == "passed":
+            result["status"] = "memory"
+            result["exception_type"] = "MemoryError"
+            result["exception_message"] = _memory_message(memory_bytes)
+    _write_result(result_path, result)
 
 
 if __name__ == "__main__":

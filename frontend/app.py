@@ -2063,6 +2063,7 @@ def render_code_tutor():
     """代码助教：本机沙箱跑代码和测试，失败时只给分级提示。"""
     from backend.platform.code_attempt_store import append_attempt, list_attempts
     from backend.tools.code_sandbox import (
+        MAX_MEMORY_BYTES,
         format_run_result,
         hint_for_level,
         record_code_run,
@@ -2078,6 +2079,7 @@ def render_code_tutor():
     ])
     st.caption(
         "在本机沙箱里运行 Python。禁止读写文件、启动子进程和联网。"
+        f"单次运行的内存上限是 {MAX_MEMORY_BYTES // (1024 * 1024)}MB，超过后只返回失败。"
         "失败时只解释错误并按级别给提示，不直接给出改正后的完整代码。"
         "同一次练习的每次运行都会留下，可以载入某一版再改。这是进程隔离，不是容器。"
     )
@@ -2130,6 +2132,7 @@ def render_code_tutor():
             "failed": "未通过",
             "rejected": "被沙箱拒绝",
             "timeout": "超时",
+            "memory": "超过内存上限",
             "error": "运行器错误",
         }
         section_head("02", "运行结果", "RESULT")
@@ -2164,6 +2167,7 @@ _ATTEMPT_LABELS = {
     "failed": "未通过",
     "rejected": "被拒绝",
     "timeout": "超时",
+    "memory": "超过内存上限",
     "error": "错误",
 }
 

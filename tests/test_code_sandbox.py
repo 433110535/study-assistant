@@ -1,4 +1,4 @@
-"""代码沙箱：通过、失败、拒绝、超时与分级提示。不调用大模型。"""
+"""代码沙箱：通过、失败、拒绝、超时、内存上限与分级提示。不调用大模型。"""
 import os
 import sys
 import unittest
@@ -67,6 +67,25 @@ class TestCodeSandbox(unittest.TestCase):
         result = run_student_code("while True:\n    pass\n", timeout_s=1)
         self.assertEqual(result["status"], "timeout", result)
         self.assertEqual(result["exception_type"], "TimeoutError")
+
+    def test_memory_limit_stops_unbounded_allocation(self):
+        from backend.tools.code_sandbox import format_run_result, hint_for_level, run_student_code
+
+        code = (
+            "chunks = []\n"
+            "for _ in range(256):\n"
+            "    chunks.append(bytearray(1024 * 1024))\n"
+            "print(len(chunks))\n"
+        )
+        result = run_student_code(code, timeout_s=5)
+        self.assertEqual(result["status"], "memory", result)
+        self.assertEqual(result["exception_type"], "MemoryError")
+        self.assertIn("内存", result.get("exception_message") or "")
+        self.assertNotIn("256", result.get("stdout") or "")
+        text = format_run_result(result)
+        hint = hint_for_level(1, text)
+        self.assertIn("内存", hint)
+        self.assertNotIn("def ", hint)
 
     def test_child_env_drops_secrets(self):
         from backend.tools.code_sandbox import _child_env

@@ -123,6 +123,34 @@ def _execute_hint_level(agent, level: int = 1, observation: str = "") -> str:
     return hint_for_level(level, observation)
 
 
+def _execute_grade_item(
+    agent,
+    question_text: str,
+    student_answer: str,
+    correct_answer: str = "",
+) -> str:
+    from backend.tools.grading import format_grade, grade_item
+
+    return format_grade(grade_item(question_text, student_answer, correct_answer))
+
+
+def _execute_diagnose_error(
+    agent,
+    question_text: str,
+    student_answer: str,
+    correct_answer: str = "",
+) -> str:
+    from backend.tools.grading import diagnose_error, format_diagnosis
+
+    return format_diagnosis(diagnose_error(question_text, student_answer, correct_answer))
+
+
+def _execute_make_variants(agent, question_text: str, count: int = 3) -> str:
+    from backend.tools.grading import format_variants, make_variants
+
+    return format_variants(make_variants(question_text, count))
+
+
 # ========== 注册工具 ==========
 
 def _register_all_tools() -> None:
@@ -460,6 +488,98 @@ def _register_all_tools() -> None:
                     },
                 },
             },
+            cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="grade_item",
+            fn=_execute_grade_item,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "grade_item",
+                    "description": (
+                        "对照标准答案判断学生答案对错。没有标准答案时返回 ungraded，"
+                        "这时不要说题目已经判对或判错。多个可接受答案用 || 分隔。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question_text": {"type": "string", "description": "题干"},
+                            "student_answer": {"type": "string", "description": "学生的答案"},
+                            "correct_answer": {
+                                "type": "string",
+                                "description": "标准答案。未知时留空，不要猜测",
+                                "default": "",
+                            },
+                        },
+                        "required": ["question_text", "student_answer"],
+                    },
+                },
+            },
+            side_effects=False,
+            cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="diagnose_error",
+            fn=_execute_diagnose_error,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "diagnose_error",
+                    "description": (
+                        "在有标准答案且 grade_item 判错之后，归类错因："
+                        "概念不清、计算失误、审题错误或其他。判对时不要编造错因。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question_text": {"type": "string", "description": "题干"},
+                            "student_answer": {"type": "string", "description": "学生的答案"},
+                            "correct_answer": {
+                                "type": "string",
+                                "description": "标准答案",
+                                "default": "",
+                            },
+                        },
+                        "required": ["question_text", "student_answer", "correct_answer"],
+                    },
+                },
+            },
+            side_effects=False,
+            cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="make_variants",
+            fn=_execute_make_variants,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "make_variants",
+                    "description": (
+                        "把题干里的数字换成邻近数字，生成同结构变式，不附答案。"
+                        "题干没有数字时会拒绝，这时不要自己编造同结构题。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question_text": {"type": "string", "description": "原题题干"},
+                            "count": {
+                                "type": "integer",
+                                "description": "变式数量，1 到 5",
+                                "default": 3,
+                            },
+                        },
+                        "required": ["question_text"],
+                    },
+                },
+            },
+            side_effects=False,
             cost_hint="local",
         )
     )

@@ -55,6 +55,7 @@ class TestDependencies(unittest.TestCase):
             "backend.tools.question_generator",
             "backend.tools.vision",
             "backend.tools.code_sandbox",
+            "backend.tools.grading",
             "backend.agents.tool_registry",
             "backend.platform.trace_store",
         ]

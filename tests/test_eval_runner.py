@@ -13,8 +13,8 @@ class TestEvalRunner(unittest.TestCase):
         from backend.platform.eval_runner import load_dataset, validate_against_registry
 
         dataset = load_dataset()
-        self.assertGreaterEqual(len(dataset["samples"]), 50)
-        self.assertEqual(dataset.get("version"), "v2")
+        self.assertGreaterEqual(len(dataset["samples"]), 56)
+        self.assertEqual(dataset.get("version"), "v3")
         self.assertEqual(validate_against_registry(dataset), [])
 
     def test_score_requires_expected_tools(self):

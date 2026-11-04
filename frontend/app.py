@@ -308,6 +308,12 @@ def clear_session_data():
         "schedule_break_duration",
         "user_input_field",
         "quiz_answer",
+        "grade_question",
+        "grade_student",
+        "grade_correct",
+        "grade_subject",
+        "grade_concept",
+        "grade_report",
         "vector_search_query",
         "rag_query",
     ):
@@ -1246,7 +1252,7 @@ def render_daily():
 def render_quiz():
     page_header("quiz", chips=[
         "<b>题型</b> 选择 / 填空 / 编程",
-        "<b>批改</b> 即时反馈",
+        "<b>批改</b> 标准答案对照",
     ])
 
     section_head("01", "出题设置", "SETUP")
@@ -1346,6 +1352,79 @@ def render_quiz():
             section_head("04", "批改结果", "REVIEW")
             with st.container(key="result_panel"):
                 st.markdown(prepare_markdown(st.session_state.last_quiz_result))
+
+    _render_standard_grade()
+
+
+def _render_standard_grade():
+    """有标准答案时本地判分，不调用模型。错题仍要到错题本确认。"""
+    from backend.platform.mistake_store import create_pending
+    from backend.tools.grading import diagnose_error, grade_item, make_variants
+
+    section_head("05", "对照标准答案", "KEY")
+    st.caption(
+        "填了标准答案才判对错。没有标准答案时不会给分。"
+        "变式只替换题干里的数字，并且不附答案。记入错题本后，还要在「错题本」里确认。"
+    )
+    question = st.text_area("题干", height=100, key="grade_question", placeholder="例如：小明有 3 个苹果，又买了 5 个，一共几个？")
+    left, right = st.columns(2)
+    with left:
+        student = st.text_input("你的答案", key="grade_student")
+    with right:
+        correct = st.text_input("标准答案", key="grade_correct", help="多个可接受答案用 || 分隔")
+    subject_col, concept_col = st.columns(2)
+    with subject_col:
+        subject = st.text_input("学科", key="grade_subject", placeholder="数学")
+    with concept_col:
+        concept = st.text_input("考点", key="grade_concept", placeholder="加法")
+
+    if st.button("判分", type="primary", key="grade_run"):
+        graded = grade_item(question, student, correct)
+        diagnosed = diagnose_error(question, student, correct) if graded["status"] == "incorrect" else None
+        variants = make_variants(question, 3) if graded["status"] == "incorrect" else None
+        st.session_state["grade_report"] = {
+            "question": question,
+            "student": student,
+            "correct": correct,
+            "subject": subject,
+            "concept": concept,
+            "graded": graded,
+            "diagnosed": diagnosed,
+            "variants": variants,
+        }
+
+    report = st.session_state.get("grade_report")
+    if not report:
+        return
+
+    graded = report["graded"]
+    labels = {"correct": "正确", "incorrect": "不正确", "ungraded": "未判分"}
+    st.markdown(f"**{labels.get(graded['status'], graded['status'])}**")
+    st.text(graded.get("reason") or "")
+    diagnosed = report.get("diagnosed")
+    if diagnosed and diagnosed.get("error_type"):
+        st.text(f"错因：{diagnosed['error_type']}。{diagnosed.get('summary') or ''}")
+    variants = report.get("variants") or {}
+    if variants.get("status") == "ready":
+        st.markdown("**变式（不附答案）**")
+        for index, item in enumerate(variants.get("items") or [], start=1):
+            st.text(f"{index}. {item['stem']}")
+    elif variants.get("status") == "unsupported":
+        st.caption(variants.get("reason") or "")
+
+    if graded["status"] != "incorrect":
+        return
+    if st.button("记入错题本", key="grade_save"):
+        create_pending(
+            user_id=st.session_state.get("auth_user") or "student",
+            subject=(report.get("subject") or "").strip() or "未填写",
+            concept=(report.get("concept") or "").strip() or "未命名考点",
+            error_type=(diagnosed or {}).get("error_type") or "其他",
+            question_text=report.get("question") or "",
+            student_answer=report.get("student") or "",
+            correct_answer=report.get("correct") or "",
+        )
+        st.success("已写入待确认错题。到「错题本」确认后才会进入复习。")
 
 
 def render_kb():

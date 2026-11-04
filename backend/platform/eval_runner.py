@@ -233,19 +233,36 @@ def check_release_gate(
 
 
 def attribute_failures(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """把没通过的样本按缺失工具计数。通过的样本不计入。没有缺失列表的失败记为 other。"""
+    """没通过的样本按缺失工具计数。检索为空、忠实度低于 0.85 另行计数，哪怕工具选对了。"""
     counts: Dict[str, int] = {}
     for item in results:
-        if item.get("passed"):
-            continue
-        missing = _missing_tools(item.get("detail"))
-        if not missing:
-            counts["other"] = counts.get("other", 0) + 1
-            continue
-        for name in missing:
+        if not item.get("passed"):
+            missing = _missing_tools(item.get("detail"))
+            if not missing:
+                counts["other"] = counts.get("other", 0) + 1
+            else:
+                for name in missing:
+                    counts[name] = counts.get(name, 0) + 1
+        for name in _failure_classes(item):
             counts[name] = counts.get(name, 0) + 1
     ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
     return [{"tool": name, "count": count} for name, count in ranked]
+
+
+def _failure_classes(item: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    extra = item.get("failure_classes")
+    if isinstance(extra, list):
+        names.extend(str(name) for name in extra if name)
+    if item.get("empty_context"):
+        names.append("empty_retrieval")
+    elif (
+        item.get("faithfulness_applicable")
+        and isinstance(item.get("faithfulness"), (int, float))
+        and float(item["faithfulness"]) + 1e-9 < GATE_MIN_FAITHFULNESS
+    ):
+        names.append("unfaithful")
+    return list(dict.fromkeys(names))
 
 
 def load_failure_board(
@@ -435,11 +452,19 @@ def score_live_answer(answer: str, rag_results: Optional[List[str]]) -> Dict[str
     from backend.platform.faithfulness import score_faithfulness
 
     if not rag_results:
-        return {"applicable": False, "score": None, "grounded": 0, "claims": 0}
+        return {
+            "applicable": False,
+            "score": None,
+            "grounded": 0,
+            "claims": 0,
+            "empty_context": False,
+        }
     contexts: List[str] = []
     for item in rag_results:
         contexts.extend(passages_from_rag_result(item))
-    return score_faithfulness(answer, contexts)
+    scored = score_faithfulness(answer, contexts)
+    scored["empty_context"] = not contexts
+    return scored
 
 
 def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -462,6 +487,7 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
                 "output": outcome.final_answer,
                 "faithfulness": scored["score"],
                 "faithfulness_applicable": scored["applicable"],
+                "empty_context": scored["empty_context"],
             }
         )
     return results

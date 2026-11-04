@@ -2464,12 +2464,17 @@ def render_eval_board():
             unsafe_allow_html=True,
         )
 
-    section_head("01", "缺失工具", "MISSING TOOLS")
+    section_head("01", "失败归因", "FAILURES")
     attribution = latest["failure_attribution"]
+    labels = {
+        "empty_retrieval": "检索为空",
+        "unfaithful": "答案不忠实",
+        "other": "其他",
+    }
     if attribution:
         top = max(item["count"] for item in attribution) or 1
         rows = "".join(
-            f'<div class="dist-row"><div class="dist-label">{html.escape(item["tool"])}</div>'
+            f'<div class="dist-row"><div class="dist-label">{html.escape(labels.get(item["tool"], item["tool"]))}</div>'
             f'<div class="dist-track"><div class="dist-fill" style="width:{int(round(item["count"] * 100 / top))}%"></div></div>'
             f'<div class="dist-val">{int(item["count"])}</div></div>'
             for item in attribution
@@ -2477,8 +2482,8 @@ def render_eval_board():
         st.markdown(f'<div class="dist">{rows}</div>', unsafe_allow_html=True)
         st.markdown(
             '<div class="note-line"><span class="dot is-muted"></span>'
-            '只统计没通过的样本。一条失败可以计入多个缺失工具；'
-            'detail 里没有缺失列表时记为 other。检索为空、超时和成本还不在这张表里。</div>',
+            '工具没选对时按缺失工具计数。检索被调用但没有正文，记为检索为空；'
+            '忠实度低于 0.85 记为答案不忠实。超时和成本还不在这张表里。</div>',
             unsafe_allow_html=True,
         )
     else:

@@ -196,6 +196,41 @@ class TestEvalRunner(unittest.TestCase):
         skipped = score_live_answer("直接回答，没有检索。", [])
         self.assertFalse(skipped["applicable"])
         self.assertIsNone(skipped["score"])
+        self.assertTrue(missed["empty_context"])
+
+    def test_attribution_counts_empty_retrieval_and_unfaithful_answers(self):
+        from backend.platform.eval_runner import attribute_failures
+
+        rows = attribute_failures(
+            [
+                {
+                    "passed": True,
+                    "faithfulness_applicable": True,
+                    "faithfulness": 0.5,
+                    "detail": {"missing": []},
+                },
+                {
+                    "passed": True,
+                    "empty_context": True,
+                    "faithfulness_applicable": True,
+                    "faithfulness": 0.0,
+                    "detail": "ok",
+                },
+                {
+                    "passed": True,
+                    "faithfulness_applicable": True,
+                    "faithfulness": 1.0,
+                    "detail": "ok",
+                },
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {"tool": "empty_retrieval", "count": 1},
+                {"tool": "unfaithful", "count": 1},
+            ],
+        )
 
     def test_failure_board_is_empty_without_runs(self):
         from backend.platform.eval_runner import load_failure_board

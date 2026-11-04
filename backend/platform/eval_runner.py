@@ -19,8 +19,9 @@ from backend.platform.trace_store import _connect, init_trace_db
 
 DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v3.json"
 
-# 发布门禁目前只检查工具选择。忠实度、注入、成本尚未接入。
+# 未传入的指标保持未检查。忠实度只用调用方给出的分数，不在这里调用模型。
 GATE_MIN_ACCURACY = 0.90
+GATE_MIN_FAITHFULNESS = 0.85
 GATE_MAX_DROP = 0.03
 
 
@@ -164,9 +165,13 @@ def save_eval_run(
 def check_release_gate(
     accuracy: float,
     baseline_accuracy: Optional[float] = None,
+    faithfulness: Optional[float] = None,
+    baseline_faithfulness: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """工具选择门禁。准确率低于 90%，或较基线下跌超过 3 个百分点，即失败。"""
+    """工具选择必查。传入忠实度时，低于 0.85 或较基线下跌超过 3 个百分点也失败。"""
     reasons = []
+    checked = ["tool_selection"]
+    not_checked = ["faithfulness", "pii", "injection", "iterations", "cost"]
     if accuracy + 1e-9 < GATE_MIN_ACCURACY:
         reasons.append(
             f"工具选择准确率 {accuracy:.2%} 低于 {GATE_MIN_ACCURACY:.0%}"
@@ -179,13 +184,30 @@ def check_release_gate(
             f"工具选择准确率 {accuracy:.2%} 比基线 {baseline_accuracy:.2%} "
             f"下降超过 {GATE_MAX_DROP:.0%}"
         )
+    if faithfulness is not None:
+        checked.append("faithfulness")
+        not_checked.remove("faithfulness")
+        if faithfulness + 1e-9 < GATE_MIN_FAITHFULNESS:
+            reasons.append(
+                f"忠实度 {faithfulness:.2%} 低于 {GATE_MIN_FAITHFULNESS:.0%}"
+            )
+        if (
+            baseline_faithfulness is not None
+            and baseline_faithfulness - faithfulness > GATE_MAX_DROP + 1e-9
+        ):
+            reasons.append(
+                f"忠实度 {faithfulness:.2%} 比基线 {baseline_faithfulness:.2%} "
+                f"下降超过 {GATE_MAX_DROP:.0%}"
+            )
     return {
         "passed": not reasons,
         "reasons": reasons,
         "accuracy": accuracy,
         "baseline_accuracy": baseline_accuracy,
-        "checked": ["tool_selection"],
-        "not_checked": ["faithfulness", "pii", "injection", "iterations", "cost"],
+        "faithfulness": faithfulness,
+        "baseline_faithfulness": baseline_faithfulness,
+        "checked": checked,
+        "not_checked": not_checked,
     }
 
 

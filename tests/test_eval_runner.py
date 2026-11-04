@@ -53,6 +53,69 @@ class TestEvalRunner(unittest.TestCase):
         self.assertTrue(held["passed"])
         self.assertIn("faithfulness", held["not_checked"])
 
+    def test_gate_blocks_low_or_dropped_faithfulness(self):
+        from backend.platform.eval_runner import check_release_gate
+
+        low = check_release_gate(0.95, faithfulness=0.80)
+        self.assertFalse(low["passed"])
+        self.assertTrue(any("忠实度" in reason for reason in low["reasons"]))
+        self.assertIn("faithfulness", low["checked"])
+        self.assertNotIn("faithfulness", low["not_checked"])
+
+        dropped = check_release_gate(
+            0.95,
+            faithfulness=0.86,
+            baseline_faithfulness=0.90,
+        )
+        self.assertFalse(dropped["passed"])
+
+        held = check_release_gate(
+            0.95,
+            faithfulness=0.85,
+            baseline_faithfulness=0.88,
+        )
+        self.assertTrue(held["passed"])
+        self.assertEqual(held["faithfulness"], 0.85)
+
+
+class TestFaithfulness(unittest.TestCase):
+    def test_quote_from_context_scores_one(self):
+        from backend.platform.faithfulness import score_faithfulness
+
+        scored = score_faithfulness(
+            "先对最外层函数求导，再乘以内层函数的导数。",
+            ["链式法则：对复合函数求导，先对最外层函数求导，再乘以内层函数的导数。"],
+        )
+        self.assertTrue(scored["applicable"])
+        self.assertEqual(scored["score"], 1.0)
+        self.assertEqual(scored["grounded"], 1)
+        self.assertEqual(scored["claims"], 1)
+
+    def test_mixed_answer_scores_half(self):
+        from backend.platform.faithfulness import score_faithfulness
+
+        scored = score_faithfulness(
+            "先对最外层函数求导，再乘以内层函数的导数。苹果是红色的水果。",
+            ["链式法则：对复合函数求导，先对最外层函数求导，再乘以内层函数的导数。"],
+        )
+        self.assertEqual(scored["score"], 0.5)
+        self.assertEqual(scored["grounded"], 1)
+        self.assertEqual(scored["claims"], 2)
+
+    def test_answer_without_context_scores_zero(self):
+        from backend.platform.faithfulness import score_faithfulness
+
+        scored = score_faithfulness("苹果是红色的水果。", [])
+        self.assertTrue(scored["applicable"])
+        self.assertEqual(scored["score"], 0.0)
+
+    def test_short_reply_is_not_scored(self):
+        from backend.platform.faithfulness import score_faithfulness
+
+        scored = score_faithfulness("好", ["好的，我们继续。"])
+        self.assertFalse(scored["applicable"])
+        self.assertIsNone(scored["score"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -69,7 +69,7 @@ def latest_thread(user_id: str, db_path: Optional[Path] = None) -> Optional[str]
             """
             SELECT thread_id FROM code_attempts
             WHERE user_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, rowid DESC
             LIMIT 1
             """,
             (user_id or "student",),

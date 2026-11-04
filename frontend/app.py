@@ -900,10 +900,23 @@ def render_qa():
             )
             if uploaded_image is not None:
                 st.image(uploaded_image, caption="待发送的题目图片", use_container_width=True)
+                source = getattr(uploaded_image, "file_id", None) or (
+                    uploaded_image.name,
+                    uploaded_image.size,
+                )
+                if st.session_state.get("qa_ocr_source") != source:
+                    from frontend.qa_image import preview_image_text, remember_ocr_preview
+
+                    with st.spinner("正在识别题目…"):
+                        recognized = preview_image_text(
+                            uploaded_image.getvalue(),
+                            Path(uploaded_image.name).suffix,
+                        )
+                    remember_ocr_preview(st.session_state, source, recognized)
         with hint_col:
             ocr_override = st.text_area(
                 "识别结果修正（可选）",
-                placeholder="若识图有误，可在发送前填入修正后的题干文字…",
+                placeholder="上传图片后，识别文本会填在这里。可以改完再发送。",
                 height=120,
                 key="qa_ocr_override",
             )

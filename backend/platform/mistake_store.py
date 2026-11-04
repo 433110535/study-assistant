@@ -35,12 +35,27 @@ def init_mistake_db(db_path: Optional[Path] = None) -> None:
                 status TEXT NOT NULL,
                 next_review_at TEXT,
                 review_count INTEGER DEFAULT 0,
+                ease REAL DEFAULT 2.5,
+                interval_days INTEGER DEFAULT 0,
+                repetitions INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_mistakes_user ON mistakes(user_id, status);
             """
         )
+        _ensure_review_columns(conn)
         conn.commit()
+
+
+def _ensure_review_columns(conn: sqlite3.Connection) -> None:
+    """旧库补上 SM-2 字段。新库的 CREATE TABLE 已经带这些列。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(mistakes)")}
+    if "ease" not in cols:
+        conn.execute("ALTER TABLE mistakes ADD COLUMN ease REAL DEFAULT 2.5")
+    if "interval_days" not in cols:
+        conn.execute("ALTER TABLE mistakes ADD COLUMN interval_days INTEGER DEFAULT 0")
+    if "repetitions" not in cols:
+        conn.execute("ALTER TABLE mistakes ADD COLUMN repetitions INTEGER DEFAULT 0")
 
 
 @contextmanager

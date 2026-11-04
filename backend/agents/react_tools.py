@@ -151,6 +151,75 @@ def _execute_make_variants(agent, question_text: str, count: int = 3) -> str:
     return format_variants(make_variants(question_text, count))
 
 
+def _review_user_id(agent) -> str:
+    return getattr(agent, "user_id", None) or "student"
+
+
+def _execute_get_learning_state(agent) -> str:
+    from backend.platform.review_planner import get_learning_state
+
+    state = get_learning_state(_review_user_id(agent))
+    due = state["due"]
+    if not due:
+        return "当前没有到期复习。"
+    lines = [f"到期 {len(due)} 题"]
+    for item in due:
+        lines.append(
+            f"- {item.get('concept') or '未命名考点'} · {item.get('subject') or '未分科'}"
+            f"（id={item['id']}）"
+        )
+        question = (item.get("question_text") or "").strip()
+        if question:
+            lines.append(f"  {question}")
+    return "\n".join(lines)
+
+
+def _execute_plan_review(agent) -> str:
+    from backend.platform.review_planner import get_learning_state
+    from backend.tools.review_schedule import format_morning_card
+
+    card = format_morning_card(get_learning_state(_review_user_id(agent))["due"])
+    return card or "当前没有到期复习。"
+
+
+def _execute_send_message(agent) -> str:
+    from backend.platform.review_planner import run_review_push
+    from backend.tools.feishu_webhook import sender_from_env
+
+    result = run_review_push(_review_user_id(agent), sender=sender_from_env())
+    if result["reason"] == "none_due":
+        return "当前没有到期复习，未发送。"
+    if result["status"] == "failed":
+        return f"晨间卡片外发失败：{result['error']}。内容已留在本地发件箱。"
+    if result["reason"] == "already_delivered":
+        return "今天的晨间卡片已保存，没有重复发送。\n" + result["body"]
+    if result["channel"] == "feishu":
+        return "已保存并发送到飞书。\n" + result["body"]
+    return "已保存到本地发件箱。未配置 REVIEW_WEBHOOK_URL，所以没有外发。\n" + result["body"]
+
+
+def _execute_reschedule(agent, when_text: str, mistake_id: str = "") -> str:
+    from datetime import datetime, timezone
+
+    from backend.platform.review_planner import get_learning_state, reschedule
+
+    user_id = _review_user_id(agent)
+    now = datetime.now(timezone.utc)
+    if mistake_id.strip():
+        ids = [mistake_id.strip()]
+    else:
+        ids = [item["id"] for item in get_learning_state(user_id, now=now)["due"]]
+    if not ids:
+        return "没有可改期的到期错题。"
+    moved = 0
+    for item_id in ids:
+        if reschedule(item_id, when_text, now=now):
+            moved += 1
+    if moved == 0:
+        return "改期失败。可以说「推到晚上」，或给出 ISO 时间。"
+    return f"已把 {moved} 道到期错题改期（{when_text}）。推到晚上即当天 20:00（北京时间）。"
+
+
 # ========== 注册工具 ==========
 
 def _register_all_tools() -> None:
@@ -581,6 +650,100 @@ def _register_all_tools() -> None:
             },
             side_effects=False,
             cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="get_learning_state",
+            fn=_execute_get_learning_state,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "get_learning_state",
+                    "description": (
+                        "读取当前用户已经确认、并且到了复习时间的错题。"
+                        "用户问今天该复习什么、或要安排复习时先调用它。"
+                    ),
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            side_effects=False,
+            cost_hint="sqlite:读",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="plan_review",
+            fn=_execute_plan_review,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "plan_review",
+                    "description": (
+                        "根据到期错题生成一张晨间复习卡片，不附标准答案，也不发送。"
+                        "调用 get_learning_state 看到有到期题后再用它。"
+                    ),
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            side_effects=False,
+            cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="send_message",
+            fn=_execute_send_message,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": (
+                        "把今天的晨间复习卡片保存到发件箱。同一天不会重复保存。"
+                        "只有配置了 REVIEW_WEBHOOK_URL 才会发到飞书。"
+                        "用户没明确要发送时不要调用。"
+                    ),
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            side_effects=True,
+            requires_approval=True,
+            cost_hint="sqlite:1 写；可选飞书 1 次",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="reschedule",
+            fn=_execute_reschedule,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "reschedule",
+                    "description": (
+                        "改到期错题的下次复习时间，不改变掌握度。"
+                        "用户说「推到晚上」时 when_text 传「推到晚上」，即改到当天北京时间 20:00。"
+                        "不传 mistake_id 时改当前全部到期题。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "when_text": {
+                                "type": "string",
+                                "description": "推到晚上、明天，或 ISO 时间",
+                            },
+                            "mistake_id": {
+                                "type": "string",
+                                "description": "只改这一条；留空则改全部到期题",
+                                "default": "",
+                            },
+                        },
+                        "required": ["when_text"],
+                    },
+                },
+            },
+            side_effects=True,
+            requires_approval=True,
+            cost_hint="sqlite:1 写",
         )
     )
 

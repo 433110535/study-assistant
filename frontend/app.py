@@ -2088,16 +2088,26 @@ def _render_code_history(attempts) -> None:
 
 
 def render_mistakes():
-    """错题本：Agent 写入的记录需人工确认后才进入复习。"""
+    """错题本：确认后按 SM-2 进入复习，到期卡片由独立脚本发送。"""
+    from datetime import timezone
+
     from backend.platform.mistake_store import (
         confirm_mistake,
         dismiss_mistake,
         list_mistakes,
     )
+    from backend.platform.review_planner import (
+        get_learning_state,
+        list_outbox,
+        record_review,
+        reschedule,
+        run_review_push,
+    )
 
     page_header("mistakes", chips=[
         "<b>写入</b> 默认待确认",
-        "<b>复习</b> 确认后次日",
+        "<b>间隔</b> SM-2",
+        "<b>推送</b> 独立脚本",
     ])
     user_id = st.session_state.get("auth_user") or "student"
     pending = list_mistakes(user_id, status="pending")
@@ -2134,11 +2144,62 @@ def render_mistakes():
     section_head("02", "复习队列", "REVIEW")
     if not confirmed:
         empty_state("QUEUE", "复习队列为空", "确认后的错题会在次日进入复习时间。")
-        return
-    for item in confirmed:
-        st.markdown(
-            f"- **{html.escape(item['concept'])}**（{html.escape(item['error_type'])}）"
-            f" · 下次复习 {html.escape(item.get('next_review_at') or '—')}"
+    else:
+        for item in confirmed:
+            interval = item.get("interval_days") or 0
+            st.markdown(
+                f"- **{html.escape(item['concept'])}**（{html.escape(item['error_type'])}）"
+                f" · 下次复习 {html.escape(item.get('next_review_at') or '—')}"
+                f" · 间隔 {interval} 天"
+            )
+
+    section_head("03", "到期复习", "DUE")
+    now = datetime.now(timezone.utc)
+    due = get_learning_state(user_id, now=now)["due"]
+    if not due:
+        empty_state(
+            "DUE",
+            "今天没有到期错题",
+            "到了下次复习时间后会出现在这里。每日任务请运行 "
+            "python -m backend.workers.review_push，不要把它放进页面自动循环。",
+        )
+    else:
+        if st.button("保存今天的晨间卡片", key="save_review_card", type="primary"):
+            run_review_push(user_id, now=now)
+            st.rerun()
+        for item in due:
+            with st.container(border=True):
+                st.markdown(
+                    f"**{html.escape(item['concept'])}** · {html.escape(item['subject'] or '')}"
+                )
+                st.write(item["question_text"])
+                remembered, forgotten, later = st.columns(3)
+                with remembered:
+                    if st.button("记住了", key=f"recall_ok_{item['id']}"):
+                        record_review(item["id"], quality=5, reviewed_at=now)
+                        st.rerun()
+                with forgotten:
+                    if st.button("没记住", key=f"recall_fail_{item['id']}"):
+                        record_review(item["id"], quality=2, reviewed_at=now)
+                        st.rerun()
+                with later:
+                    if st.button("推到晚上", key=f"evening_{item['id']}"):
+                        reschedule(item["id"], "推到晚上", now=now)
+                        st.rerun()
+
+    cards = list_outbox(user_id)
+    section_head("04", "发件箱", "OUTBOX")
+    if not cards:
+        empty_state(
+            "OUTBOX",
+            "还没有晨间卡片",
+            "有到期错题时，点「保存今天的晨间卡片」，或运行独立脚本。未配置飞书 webhook 时只保存在本地。",
+        )
+    else:
+        latest = cards[-1]
+        st.text(latest["body"])
+        st.caption(
+            f"{latest['channel']} · {latest['status']} · {latest['created_at']}"
         )
 
 

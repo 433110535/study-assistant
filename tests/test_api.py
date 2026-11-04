@@ -476,6 +476,40 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json(), grade_paper(paper))
 
+    def test_item_grade_route_matches_the_local_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+        from backend.api.local_client import create_user_mistake, list_user_mistakes
+        from backend.tools.grading import diagnose_error, grade_item, make_variants
+
+        question = "小明有 3 个苹果，又买了 5 个，一共几个？"
+        app = create_app(self.db, api_key="secret")
+        with TestClient(app) as client:
+            wrong = client.post(
+                "/v1/items/grade",
+                json={"question": question, "student": "7", "correct": "8"},
+                headers=self._headers(),
+            )
+        self.assertEqual(wrong.status_code, 200)
+        body = wrong.json()
+        self.assertEqual(body["graded"], grade_item(question, "7", "8"))
+        self.assertEqual(body["diagnosed"], diagnose_error(question, "7", "8"))
+        self.assertEqual(body["variants"], make_variants(question, 3))
+        created = create_user_mistake(
+            "student",
+            "数学",
+            "加法",
+            body["diagnosed"]["error_type"],
+            question,
+            "7",
+            "8",
+            db_path=self.db,
+        )
+        self.assertEqual(created["status"], "pending")
+        pending = list_user_mistakes("student", status="pending", db_path=self.db)
+        self.assertEqual(pending[0]["id"], created["id"])
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

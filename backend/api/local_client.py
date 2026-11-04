@@ -72,6 +72,46 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def grade_one_item(
+    question: str,
+    student: str,
+    correct: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "POST",
+        "/v1/items/grade",
+        db_path=db_path,
+        json_body={"question": question, "student": student, "correct": correct},
+    )
+
+
+def create_user_mistake(
+    user_id: str,
+    subject: str,
+    concept: str,
+    error_type: str,
+    question_text: str,
+    student_answer: str,
+    correct_answer: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "POST",
+        "/v1/mistakes",
+        db_path=db_path,
+        json_body={
+            "user_id": user_id,
+            "subject": subject,
+            "concept": concept,
+            "error_type": error_type,
+            "question_text": question_text,
+            "student_answer": student_answer,
+            "correct_answer": correct_answer,
+        },
+    )
+
+
 def grade_paper_text(text: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
     return request_json(
         "POST",

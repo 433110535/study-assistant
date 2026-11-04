@@ -145,6 +145,23 @@ def create_app(
 
         return load_failure_board(database)
 
+    @app.post("/v1/mistakes", dependencies=guard)
+    def create_mistake(payload: dict = Body(...)) -> dict:
+        from backend.platform.mistake_store import create_pending
+
+        user_id = str(payload.get("user_id") or "student").strip() or "student"
+        mistake_id = create_pending(
+            user_id,
+            subject=str(payload.get("subject") or "").strip() or "未填写",
+            concept=str(payload.get("concept") or "").strip() or "未命名考点",
+            error_type=str(payload.get("error_type") or "").strip() or "其他",
+            question_text=str(payload.get("question_text") or ""),
+            student_answer=str(payload.get("student_answer") or ""),
+            correct_answer=str(payload.get("correct_answer") or ""),
+            db_path=database,
+        )
+        return {"id": mistake_id, "status": "pending"}
+
     @app.get("/v1/mistakes", dependencies=guard)
     def mistakes(user_id: str = "student", status: str = "") -> dict:
         from backend.platform.mistake_store import list_mistakes
@@ -344,6 +361,22 @@ def create_app(
 
             fn = grade_paper
         return fn(text)
+
+    @app.post("/v1/items/grade", dependencies=guard)
+    def grade_one(payload: dict = Body(...)) -> dict:
+        from backend.tools.grading import diagnose_error, grade_item, make_variants
+
+        question = str(payload.get("question") or "")
+        student = str(payload.get("student") or "")
+        correct = str(payload.get("correct") or "")
+        graded = grade_item(question, student, correct)
+        if graded["status"] != "incorrect":
+            return {"graded": graded, "diagnosed": None, "variants": None}
+        return {
+            "graded": graded,
+            "diagnosed": diagnose_error(question, student, correct),
+            "variants": make_variants(question, 3),
+        }
 
     return app
 

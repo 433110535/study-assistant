@@ -1531,8 +1531,7 @@ def _render_paper_grade():
 
 def _render_standard_grade():
     """有标准答案时本地判分，不调用模型。错题仍要到错题本确认。"""
-    from backend.platform.mistake_store import create_pending
-    from backend.tools.grading import diagnose_error, grade_item, make_variants
+    from backend.api.local_client import create_user_mistake, grade_one_item
 
     section_head("05", "对照标准答案", "KEY")
     st.caption(
@@ -1552,9 +1551,10 @@ def _render_standard_grade():
         concept = st.text_input("考点", key="grade_concept", placeholder="加法")
 
     if st.button("判分", type="primary", key="grade_run"):
-        graded = grade_item(question, student, correct)
-        diagnosed = diagnose_error(question, student, correct) if graded["status"] == "incorrect" else None
-        variants = make_variants(question, 3) if graded["status"] == "incorrect" else None
+        report = grade_one_item(question, student, correct)
+        graded = report["graded"]
+        diagnosed = report.get("diagnosed")
+        variants = report.get("variants")
         st.session_state["grade_report"] = {
             "question": question,
             "student": student,
@@ -1584,14 +1584,14 @@ def _render_standard_grade():
             st.caption(variants.get("reason") or "")
 
         if graded["status"] == "incorrect" and st.button("记入错题本", key="grade_save"):
-            create_pending(
-                user_id=st.session_state.get("auth_user") or "student",
-                subject=(report.get("subject") or "").strip() or "未填写",
-                concept=(report.get("concept") or "").strip() or "未命名考点",
-                error_type=(diagnosed or {}).get("error_type") or "其他",
-                question_text=report.get("question") or "",
-                student_answer=report.get("student") or "",
-                correct_answer=report.get("correct") or "",
+            create_user_mistake(
+                st.session_state.get("auth_user") or "student",
+                (report.get("subject") or "").strip() or "未填写",
+                (report.get("concept") or "").strip() or "未命名考点",
+                (diagnosed or {}).get("error_type") or "其他",
+                report.get("question") or "",
+                report.get("student") or "",
+                report.get("correct") or "",
             )
             st.success("已写入待确认错题。到「错题本」确认后才会进入复习。")
 

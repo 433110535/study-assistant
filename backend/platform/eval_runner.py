@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -262,7 +263,32 @@ def _failure_classes(item: Dict[str, Any]) -> List[str]:
         and float(item["faithfulness"]) + 1e-9 < GATE_MIN_FAITHFULNESS
     ):
         names.append("unfaithful")
+    tool_text = "\n".join(
+        str(piece) for piece in (item.get("tool_results") or []) if piece
+    )
+    if "执行超时" in tool_text:
+        names.append("timeout")
+    cost = item.get("cost_yuan")
+    limit = item.get("cost_limit_yuan")
+    if (
+        isinstance(cost, (int, float))
+        and isinstance(limit, (int, float))
+        and float(cost) > float(limit) + 1e-12
+    ):
+        names.append("over_cost")
     return list(dict.fromkeys(names))
+
+
+def cost_limit_from_env(environ: Optional[Dict[str, str]] = None) -> Optional[float]:
+    """未设置 EVAL_MAX_COST_YUAN 时不判成本超限。写了但不是数字也跳过。"""
+    env = os.environ if environ is None else environ
+    raw = str(env.get("EVAL_MAX_COST_YUAN", "")).strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 def load_failure_board(
@@ -478,6 +504,11 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
         outcome = agent.react(item["input"])
         judged = score_tool_selection(item["expected_tools"], outcome.tools_used)
         scored = score_live_answer(outcome.final_answer, outcome.rag_results)
+        tool_results = [
+            step.tool_result_preview
+            for step in outcome.steps
+            if step.tool_result_preview
+        ]
         results.append(
             {
                 "sample_id": item["id"],
@@ -488,9 +519,26 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
                 "faithfulness": scored["score"],
                 "faithfulness_applicable": scored["applicable"],
                 "empty_context": scored["empty_context"],
+                "tool_results": tool_results,
+                "cost_yuan": _trace_cost(outcome.trace_id),
+                "cost_limit_yuan": cost_limit_from_env(),
             }
         )
     return results
+
+
+def _trace_cost(trace_id: str) -> Optional[float]:
+    if not trace_id:
+        return None
+    from backend.platform.trace_store import get_trace
+
+    found = get_trace(trace_id)
+    if not found:
+        return None
+    cost = found["run"].get("cost_yuan")
+    if isinstance(cost, (int, float)):
+        return float(cost)
+    return None
 
 
 def main() -> None:

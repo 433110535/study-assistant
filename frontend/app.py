@@ -2469,6 +2469,8 @@ def render_eval_board():
     labels = {
         "empty_retrieval": "检索为空",
         "unfaithful": "答案不忠实",
+        "timeout": "超时",
+        "over_cost": "成本超限",
         "other": "其他",
     }
     if attribution:
@@ -2482,8 +2484,9 @@ def render_eval_board():
         st.markdown(f'<div class="dist">{rows}</div>', unsafe_allow_html=True)
         st.markdown(
             '<div class="note-line"><span class="dot is-muted"></span>'
-            '工具没选对时按缺失工具计数。检索被调用但没有正文，记为检索为空；'
-            '忠实度低于 0.85 记为答案不忠实。超时和成本还不在这张表里。</div>',
+            '工具没选对时按缺失工具计数。检索没有正文记为检索为空；'
+            '忠实度低于 0.85 记为答案不忠实。工具返回里出现「执行超时」记为超时。'
+            '只有设置了 EVAL_MAX_COST_YUAN 且本次费用更高，才记为成本超限。</div>',
             unsafe_allow_html=True,
         )
     else:

@@ -233,6 +233,41 @@ class TestEvalRunner(unittest.TestCase):
             ],
         )
 
+    def test_timeout_and_cost_are_counted_separately_from_the_answer_text(self):
+        from backend.platform.eval_runner import attribute_failures, cost_limit_from_env
+
+        rows = attribute_failures(
+            [
+                {
+                    "passed": True,
+                    "tool_results": ["工具 run_code 执行超时（>5s），请稍后重试。"],
+                    "output": "这次没有超时。",
+                },
+                {
+                    "passed": True,
+                    "output": "执行超时只是回答里的词。",
+                    "tool_results": ["正常返回"],
+                    "cost_yuan": 1.2,
+                    "cost_limit_yuan": 0.5,
+                },
+                {
+                    "passed": True,
+                    "cost_yuan": 0.1,
+                    "cost_limit_yuan": 0.5,
+                },
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {"tool": "over_cost", "count": 1},
+                {"tool": "timeout", "count": 1},
+            ],
+        )
+        self.assertIsNone(cost_limit_from_env({}))
+        self.assertIsNone(cost_limit_from_env({"EVAL_MAX_COST_YUAN": "abc"}))
+        self.assertEqual(cost_limit_from_env({"EVAL_MAX_COST_YUAN": "0.5"}), 0.5)
+
     def test_failure_board_is_empty_without_runs(self):
         from backend.platform.eval_runner import load_failure_board
 

@@ -72,6 +72,21 @@ def iter_chat_events(
     yield from parse_sse(response.text)
 
 
+def explain_text(
+    concept: str,
+    subject: str = "",
+    level: str = "初学者",
+    db_path: Optional[Path] = None,
+) -> str:
+    data = request_json(
+        "POST",
+        "/v1/explain",
+        db_path=db_path,
+        json_body={"concept": concept, "subject": subject, "level": level},
+    )
+    return str(data.get("text") or "")
+
+
 def failure_board(db_path: Optional[Path] = None) -> Dict[str, Any]:
     return request_json("GET", "/v1/eval/latest", db_path=db_path)
 

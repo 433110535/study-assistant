@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 
 from backend.agents.react_agent import ReActStudyAgent
 from backend.llm_helper import text_content
-from backend.tools.knowledge import explain_concept, break_down_concept, compare_concepts
+from backend.tools.knowledge import break_down_concept, compare_concepts
 from backend.tools.plan_generator import generate_study_plan, create_daily_schedule, generate_milestone_checklist
 from backend.tools.question_generator import generate_questions, check_answer
 from backend.config import validate_config, LLM_MODEL, UPLOADS_DIR
@@ -975,7 +975,7 @@ def render_qa():
 
 def render_knowledge():
     page_header("knowledge", chips=[
-        "<b>输出</b> 结构化讲解",
+        "<b>输出</b> /v1/explain",
         "<b>深度</b> 初 / 中 / 高",
     ])
 
@@ -999,7 +999,9 @@ def render_knowledge():
                 if concept.strip():
                     with st.spinner("正在生成详细讲解，请稍候…"):
                         try:
-                            result = explain_concept(concept, subject, level)
+                            from backend.api.local_client import explain_text
+
+                            result = explain_text(concept, subject, level)
                             st.session_state.last_explanation = result
                             st.session_state.last_concept = concept
                             st.session_state.last_explanation_meta = {

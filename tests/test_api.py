@@ -323,6 +323,26 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(events[0]["event_type"], "final_answer")
         self.assertEqual(events[0]["content"], "好")
 
+    def test_explain_route_uses_the_injected_function(self):
+        from fastapi.testclient import TestClient
+
+        from backend.api.app import create_app
+
+        def fake(concept: str, subject: str = "", level: str = "初学者") -> str:
+            return f"{concept}|{subject}|{level}"
+
+        app = create_app(self.db, api_key="secret", explain_fn=fake)
+        with TestClient(app) as client:
+            empty = client.post("/v1/explain", json={"concept": "  "}, headers=self._headers())
+            self.assertEqual(empty.status_code, 400)
+            ok = client.post(
+                "/v1/explain",
+                json={"concept": "递归", "subject": "编程", "level": "中级"},
+                headers=self._headers(),
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["text"], "递归|编程|中级")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

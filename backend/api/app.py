@@ -44,6 +44,7 @@ def create_app(
     db_path: Optional[Path] = None,
     api_key: str = "",
     agent_factory: Optional[Callable[[], Any]] = None,
+    explain_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     app = FastAPI(title="学习助手", version="0.1.0")
@@ -200,6 +201,20 @@ def create_app(
             iter_chat_sse(agent, message),
             media_type="text/event-stream",
         )
+
+    @app.post("/v1/explain", dependencies=guard)
+    def explain(payload: dict = Body(...)) -> dict:
+        concept = str(payload.get("concept") or "").strip()
+        if not concept:
+            raise HTTPException(status_code=400, detail="concept 不能为空")
+        subject = str(payload.get("subject") or "")
+        level = str(payload.get("level") or "初学者")
+        fn = explain_fn
+        if fn is None:
+            from backend.tools.knowledge import explain_concept
+
+            fn = explain_concept
+        return {"text": fn(concept, subject, level)}
 
     return app
 

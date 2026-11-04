@@ -52,6 +52,7 @@ def get_llm(temperature: float = None, max_tokens: int = None):
         max_tokens=tokens,
         request_timeout=60,
         max_retries=2,
+        stream_usage=True,
     )
 
 

@@ -13,6 +13,8 @@ from backend.agents.base_agent import BaseAgent
 from backend.agents.react_models import ReActEvent, ReActEventType, ReActStep, ReActResult
 from backend.agents.react_tools import get_tool_schemas, execute_tool
 from backend.llm_helper import text_content
+from backend.config import LLM_MODEL
+from backend.platform.llm_cost import usage_from_message
 from backend.platform.trace_store import TraceRun
 
 # FAISS 知识库
@@ -100,8 +102,13 @@ class ReActStudyAgent(BaseAgent):
         """
         messages = self._build_messages(user_input)
         iteration = 0
-        trace = TraceRun(user_input=user_input, session_id=self.session_id)
+        trace = TraceRun(
+            user_input=user_input,
+            session_id=self.session_id,
+            model=LLM_MODEL,
+        )
         trace.start()
+        self.last_trace_id = trace.trace_id
         final_status = "ok"
 
         for iteration in range(1, self.max_iterations + 1):
@@ -113,6 +120,8 @@ class ReActStudyAgent(BaseAgent):
 
             try:
                 response = self.llm_with_tools.invoke(messages)
+                prompt_tokens, completion_tokens = usage_from_message(response)
+                trace.add_usage(prompt_tokens, completion_tokens)
             except Exception as e:
                 final_status = "error"
                 yield ReActEvent(
@@ -133,15 +142,7 @@ class ReActStudyAgent(BaseAgent):
                 )
                 streamed = ""
                 try:
-                    for chunk in self.llm.stream(messages[:-1]):
-                        piece = text_content(chunk.content)
-                        if piece:
-                            streamed += piece
-                            yield ReActEvent(
-                                event_type=ReActEventType.ANSWER_CHUNK,
-                                content=piece,
-                                iteration=iteration
-                            )
+                    streamed = yield from self._stream_answer(messages[:-1], iteration, trace)
                 except Exception as e:
                     streamed = streamed or text_content(response.content) or f"回答生成失败: {e}"
 
@@ -203,15 +204,7 @@ class ReActStudyAgent(BaseAgent):
 
         streamed = ""
         try:
-            for chunk in self.llm.stream(messages):
-                piece = text_content(chunk.content)
-                if piece:
-                    streamed += piece
-                    yield ReActEvent(
-                        event_type=ReActEventType.ANSWER_CHUNK,
-                        content=piece,
-                        iteration=iteration
-                    )
+            streamed = yield from self._stream_answer(messages, iteration, trace)
         except Exception as e:
             streamed = streamed or f"抱歉，生成回答时出错: {str(e)}"
 
@@ -264,8 +257,29 @@ class ReActStudyAgent(BaseAgent):
             final_answer=final_answer,
             steps=steps,
             total_iterations=total_iterations,
-            tools_used=tools_used
+            tools_used=tools_used,
+            trace_id=getattr(self, "last_trace_id", ""),
         )
+
+    def _stream_answer(self, messages, iteration: int, trace: TraceRun):
+        """流式写出最终回答，并把最后一块上的 token 用量记进同一次运行。"""
+        streamed = ""
+        seen_in = 0
+        seen_out = 0
+        for chunk in self.llm.stream(messages):
+            piece = text_content(chunk.content)
+            if piece:
+                streamed += piece
+                yield ReActEvent(
+                    event_type=ReActEventType.ANSWER_CHUNK,
+                    content=piece,
+                    iteration=iteration,
+                )
+            prompt_tokens, completion_tokens = usage_from_message(chunk)
+            if prompt_tokens or completion_tokens:
+                seen_in, seen_out = prompt_tokens, completion_tokens
+        trace.add_usage(seen_in, seen_out)
+        return streamed
 
     # ========== 向后兼容方法 ==========
 

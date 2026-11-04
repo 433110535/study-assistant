@@ -44,3 +44,4 @@ class ReActResult(BaseModel):
     total_iterations: int = 0
     tools_used: List[str] = []
     success: bool = True
+    trace_id: str = ""

@@ -9,9 +9,18 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from datetime import datetime
+
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
 from backend.config import TRACE_DB_PATH
+
+
+def _parse_now(value: str):
+    text = (value or "").strip()
+    if not text:
+        return None
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def create_app(
@@ -92,6 +101,61 @@ def create_app(
         if not dismiss_mistake(mistake_id, db_path=database):
             raise HTTPException(status_code=404, detail="没有可丢弃的待确认错题")
         return {"id": mistake_id, "status": "dismissed"}
+
+    @app.get("/v1/review/due", dependencies=guard)
+    def review_due(user_id: str = "student", now: str = "") -> dict:
+        from backend.platform.review_planner import get_learning_state
+
+        due = get_learning_state(user_id, now=_parse_now(now), db_path=database)["due"]
+        return {"due": due}
+
+    @app.post("/v1/mistakes/{mistake_id}/review", dependencies=guard)
+    def mark_review(mistake_id: str, payload: dict = Body(...)) -> dict:
+        from backend.platform.review_planner import record_review
+
+        quality = payload.get("quality")
+        if not isinstance(quality, int) or quality < 0 or quality > 5:
+            raise HTTPException(status_code=400, detail="quality 必须是 0 到 5 的整数")
+        saved = record_review(
+            mistake_id,
+            quality,
+            reviewed_at=_parse_now(str(payload.get("now") or "")),
+            db_path=database,
+        )
+        if not saved:
+            raise HTTPException(status_code=404, detail="没有可记回忆的已确认错题")
+        return saved
+
+    @app.post("/v1/mistakes/{mistake_id}/reschedule", dependencies=guard)
+    def move_review(mistake_id: str, payload: dict = Body(...)) -> dict:
+        from backend.platform.review_planner import reschedule
+
+        when_text = str(payload.get("when_text") or "")
+        if not reschedule(
+            mistake_id,
+            when_text,
+            now=_parse_now(str(payload.get("now") or "")),
+            db_path=database,
+        ):
+            raise HTTPException(status_code=404, detail="没有可改期的已确认错题")
+        return {"id": mistake_id, "when_text": when_text}
+
+    @app.post("/v1/review/cards", dependencies=guard)
+    def save_card(payload: dict = Body(...)) -> dict:
+        from backend.platform.review_planner import run_review_push
+
+        user_id = str(payload.get("user_id") or "student")
+        return run_review_push(
+            user_id,
+            now=_parse_now(str(payload.get("now") or "")),
+            db_path=database,
+        )
+
+    @app.get("/v1/review/outbox", dependencies=guard)
+    def outbox(user_id: str = "student") -> dict:
+        from backend.platform.review_planner import list_outbox
+
+        return {"cards": list_outbox(user_id, db_path=database)}
 
     @app.get("/v1/review/plan", dependencies=guard)
     def review_plan(user_id: str = "student") -> dict:

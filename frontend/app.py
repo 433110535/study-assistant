@@ -2213,14 +2213,12 @@ def render_mistakes():
     from backend.api.local_client import (
         confirm_user_mistake,
         dismiss_user_mistake,
+        due_reviews,
+        list_review_cards,
         list_user_mistakes,
-    )
-    from backend.platform.review_planner import (
-        get_learning_state,
-        list_outbox,
-        record_review,
-        reschedule,
-        run_review_push,
+        move_review,
+        remember_review,
+        save_review_card,
     )
 
     page_header("mistakes", chips=[
@@ -2273,8 +2271,9 @@ def render_mistakes():
             )
 
     section_head("03", "到期复习", "DUE")
-    now = datetime.now(timezone.utc)
-    due = get_learning_state(user_id, now=now)["due"]
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    stamp = now.isoformat()
+    due = due_reviews(user_id, now=stamp)["due"]
     if not due:
         empty_state(
             "DUE",
@@ -2284,7 +2283,7 @@ def render_mistakes():
         )
     else:
         if st.button("保存今天的晨间卡片", key="save_review_card", type="primary"):
-            run_review_push(user_id, now=now)
+            save_review_card(user_id, now=stamp)
             st.rerun()
         for item in due:
             with st.container(border=True):
@@ -2295,18 +2294,18 @@ def render_mistakes():
                 remembered, forgotten, later = st.columns(3)
                 with remembered:
                     if st.button("记住了", key=f"recall_ok_{item['id']}"):
-                        record_review(item["id"], quality=5, reviewed_at=now)
+                        remember_review(item["id"], quality=5, now=stamp)
                         st.rerun()
                 with forgotten:
                     if st.button("没记住", key=f"recall_fail_{item['id']}"):
-                        record_review(item["id"], quality=2, reviewed_at=now)
+                        remember_review(item["id"], quality=2, now=stamp)
                         st.rerun()
                 with later:
                     if st.button("推到晚上", key=f"evening_{item['id']}"):
-                        reschedule(item["id"], "推到晚上", now=now)
+                        move_review(item["id"], "推到晚上", now=stamp)
                         st.rerun()
 
-    cards = list_outbox(user_id)
+    cards = list_review_cards(user_id)
     section_head("04", "发件箱", "OUTBOX")
     if not cards:
         empty_state(

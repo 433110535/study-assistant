@@ -184,6 +184,75 @@ class TestLocalApi(unittest.TestCase):
         self.assertEqual(via_route["latest"]["failure_attribution"], direct["latest"]["failure_attribution"])
         self.assertEqual(via_route["latest"]["failure_attribution"][0]["tool"], "rag_search")
 
+    def test_due_review_and_local_card_go_through_the_route(self):
+        from datetime import datetime
+
+        from backend.api.local_client import (
+            due_reviews,
+            list_review_cards,
+            move_review,
+            remember_review,
+            save_review_card,
+        )
+        from backend.platform.mistake_store import confirm_mistake, create_pending
+        from backend.platform.review_planner import reschedule
+
+        stamp = "2026-11-04T01:00:00+00:00"
+        moment = datetime.fromisoformat(stamp)
+        mistake_id = create_pending(
+            "student",
+            subject="数学",
+            concept="链式法则",
+            error_type="概念不清",
+            question_text="求 d/dx sin(x^2)",
+            student_answer="cos(x^2)",
+            correct_answer="2x cos(x^2)",
+            db_path=self.db,
+        )
+        self.assertTrue(confirm_mistake(mistake_id, db_path=self.db))
+        self.assertTrue(
+            reschedule(
+                mistake_id,
+                "2026-11-01T00:00:00+00:00",
+                now=moment,
+                db_path=self.db,
+            )
+        )
+        due = due_reviews("student", now=stamp, db_path=self.db)["due"]
+        self.assertEqual([item["id"] for item in due], [mistake_id])
+        saved = save_review_card("student", now=stamp, db_path=self.db)
+        self.assertEqual(saved["channel"], "local")
+        self.assertEqual(saved["status"], "stored")
+        self.assertNotIn("2x cos", saved["body"])
+        cards = list_review_cards("student", db_path=self.db)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(move_review(mistake_id, "推到晚上", now=stamp, db_path=self.db)["when_text"], "推到晚上")
+        self.assertEqual(due_reviews("student", now=stamp, db_path=self.db)["due"], [])
+        remembered = remember_review(mistake_id, quality=5, now=stamp, db_path=self.db)
+        self.assertEqual(remembered["interval_days"], 1)
+        pending = create_pending(
+            "student",
+            subject="数学",
+            concept="换元",
+            error_type="计算失误",
+            question_text="求积分",
+            student_answer="错",
+            correct_answer="对",
+            db_path=self.db,
+        )
+        denied = self.client.post(
+            f"/v1/mistakes/{pending}/review",
+            json={"quality": 5, "now": stamp},
+            headers=self._headers(),
+        )
+        self.assertEqual(denied.status_code, 404)
+        bad_quality = self.client.post(
+            f"/v1/mistakes/{mistake_id}/review",
+            json={"quality": 9, "now": stamp},
+            headers=self._headers(),
+        )
+        self.assertEqual(bad_quality.status_code, 400)
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

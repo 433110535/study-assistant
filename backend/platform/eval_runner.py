@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from backend.config import BASE_DIR, TRACE_DB_PATH
 from backend.platform.trace_store import _connect, init_trace_db
 
-DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v3.json"
+DEFAULT_DATASET = BASE_DIR / "eval" / "datasets" / "qa_baseline_v4.json"
 
 # 未传入的指标保持未检查。忠实度只用调用方给出的分数，不在这里调用模型。
 GATE_MIN_ACCURACY = 0.90
@@ -43,6 +43,15 @@ def load_dataset(path: Optional[Path] = None) -> Dict[str, Any]:
             raise ValueError(f"样本缺少 input 或 expected_tools: {item.get('id')}")
         if not isinstance(item["expected_tools"], list):
             raise ValueError(f"expected_tools 必须是列表: {item.get('id')}")
+        if "contexts" in item or "answer" in item:
+            contexts = item.get("contexts")
+            answer = item.get("answer")
+            if not isinstance(contexts, list) or not contexts or not all(
+                isinstance(piece, str) and piece.strip() for piece in contexts
+            ):
+                raise ValueError(f"检索样本缺少固定片段: {item.get('id')}")
+            if not isinstance(answer, str) or not answer.strip():
+                raise ValueError(f"检索样本缺少参考回答: {item.get('id')}")
     return data
 
 
@@ -117,10 +126,12 @@ def save_eval_run(
     run_id = str(uuid.uuid4())
     passed = sum(1 for item in results if item["passed"])
     now = _utc_now()
+    faithfulness = mean_faithfulness(results)
     summary = {
         "passed": passed,
         "total": len(results),
         "accuracy": round(passed / len(results), 4) if results else 0,
+        "faithfulness": None if faithfulness is None else round(faithfulness, 4),
     }
     with _connect(path) as conn:
         conn.execute(
@@ -211,20 +222,45 @@ def check_release_gate(
     }
 
 
+def mean_faithfulness(results: List[Dict[str, Any]]) -> Optional[float]:
+    """只平均这次打了分的样本。没有检索片段的题不进来。"""
+    scores = [
+        float(item["faithfulness"])
+        for item in results
+        if item.get("faithfulness_applicable") and item.get("faithfulness") is not None
+    ]
+    if not scores:
+        return None
+    return sum(scores) / len(scores)
+
+
+def _faithfulness_for_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+    if "contexts" not in sample and "answer" not in sample:
+        return {"applicable": False, "score": None, "grounded": 0, "claims": 0}
+    from backend.platform.faithfulness import score_faithfulness
+
+    return score_faithfulness(sample.get("answer") or "", sample.get("contexts") or [])
+
+
 def dry_run(dataset: Dict[str, Any]) -> List[Dict[str, Any]]:
     unknown = validate_against_registry(dataset)
     if unknown:
         raise ValueError("评测集引用了未注册工具: " + ", ".join(unknown))
-    return [
-        {
-            "sample_id": item["id"],
-            "passed": True,
-            "tools_used": item["expected_tools"],
-            "detail": "schema_ok",
-            "output": "",
-        }
-        for item in dataset["samples"]
-    ]
+    results = []
+    for item in dataset["samples"]:
+        scored = _faithfulness_for_sample(item)
+        results.append(
+            {
+                "sample_id": item["id"],
+                "passed": True,
+                "tools_used": item["expected_tools"],
+                "detail": "schema_ok",
+                "output": item.get("answer") or "",
+                "faithfulness": scored["score"],
+                "faithfulness_applicable": scored["applicable"],
+            }
+        )
+    return results
 
 
 def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -267,13 +303,18 @@ def main() -> None:
     run_id = save_eval_run(dataset, mode, results)
     passed = sum(1 for item in results if item["passed"])
     accuracy = passed / len(results) if results else 0.0
-    gate = check_release_gate(accuracy)
+    faithfulness = mean_faithfulness(results)
+    gate = check_release_gate(accuracy, faithfulness=faithfulness)
+    faith_text = "不适用" if faithfulness is None else f"{faithfulness:.2%}"
     print(
         f"[{mode}] {dataset['name']}@{dataset['version']} "
-        f"{passed}/{len(results)} 通过，eval_run={run_id}"
+        f"工具选择 {passed}/{len(results)}，忠实度 {faith_text}，eval_run={run_id}"
     )
     if gate["passed"]:
-        print("门禁通过（仅工具选择；忠实度等指标未检查）")
+        if faithfulness is None:
+            print("门禁通过（仅工具选择；这次没有可打分的忠实度）")
+        else:
+            print(f"门禁通过（工具选择 {accuracy:.2%}，忠实度 {faithfulness:.2%}）")
     else:
         print("门禁未通过: " + "；".join(gate["reasons"]))
         raise SystemExit(1)

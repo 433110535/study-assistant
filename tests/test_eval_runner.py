@@ -14,8 +14,74 @@ class TestEvalRunner(unittest.TestCase):
 
         dataset = load_dataset()
         self.assertGreaterEqual(len(dataset["samples"]), 56)
-        self.assertEqual(dataset.get("version"), "v3")
+        self.assertEqual(dataset.get("version"), "v4")
         self.assertEqual(validate_against_registry(dataset), [])
+
+    def test_v3_snapshot_stays_free_of_passages(self):
+        from backend.platform.eval_runner import load_dataset
+
+        v3 = load_dataset(PROJECT_ROOT / "eval" / "datasets" / "qa_baseline_v3.json")
+        v4 = load_dataset()
+        self.assertEqual(v3.get("version"), "v3")
+        self.assertTrue(all("contexts" not in sample for sample in v3["samples"]))
+        self.assertEqual(
+            [(sample["id"], sample["expected_tools"]) for sample in v3["samples"]],
+            [(sample["id"], sample["expected_tools"]) for sample in v4["samples"]],
+        )
+
+    def test_dry_run_scores_faithfulness_only_for_retrieval_items(self):
+        from backend.platform.eval_runner import (
+            check_release_gate,
+            dry_run,
+            load_dataset,
+            mean_faithfulness,
+        )
+
+        dataset = load_dataset()
+        results = dry_run(dataset)
+        applicable = [item for item in results if item["faithfulness_applicable"]]
+        retrieval_ids = {
+            sample["id"]
+            for sample in dataset["samples"]
+            if "rag_search" in sample["expected_tools"]
+        }
+        self.assertEqual(retrieval_ids, {item["sample_id"] for item in applicable})
+        self.assertEqual(len(applicable), 10)
+        self.assertEqual(mean_faithfulness(results), 1.0)
+        self.assertTrue(all(item["passed"] for item in results))
+        gate = check_release_gate(1.0, faithfulness=mean_faithfulness(results))
+        self.assertTrue(gate["passed"])
+        self.assertIn("faithfulness", gate["checked"])
+
+    def test_ungrounded_sentence_fails_the_faithfulness_gate(self):
+        from backend.platform.eval_runner import check_release_gate, dry_run, mean_faithfulness
+
+        dataset = {
+            "name": "tiny",
+            "version": "v0",
+            "samples": [
+                {
+                    "id": "grounded",
+                    "input": "检索贝叶斯定理",
+                    "expected_tools": ["rag_search"],
+                    "contexts": ["贝叶斯定理把后验概率写成先验概率与似然的乘积，再除以证据。"],
+                    "answer": "贝叶斯定理把后验概率写成先验概率与似然的乘积，再除以证据。苹果是红色的水果。",
+                },
+                {
+                    "id": "direct",
+                    "input": "你好",
+                    "expected_tools": [],
+                },
+            ],
+        }
+        results = dry_run(dataset)
+        self.assertEqual(
+            [item["faithfulness_applicable"] for item in results],
+            [True, False],
+        )
+        self.assertEqual(mean_faithfulness(results), 0.5)
+        gate = check_release_gate(1.0, faithfulness=0.5)
+        self.assertFalse(gate["passed"])
 
     def test_score_requires_expected_tools(self):
         from backend.platform.eval_runner import score_tool_selection

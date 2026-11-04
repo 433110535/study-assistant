@@ -3,7 +3,8 @@
 
 示例：
     python -m backend.workers.review_push --user student
-配置 REVIEW_WEBHOOK_URL 后才会请求飞书；否则只写入本地发件箱。
+配置 REVIEW_WEBHOOK_URL 后才会请求飞书。配置 SMTP_HOST、SMTP_FROM、
+REVIEW_EMAIL_TO 后才会发邮件。都没有时只写入本地发件箱。
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from backend.platform.review_planner import run_review_push
 from backend.tools.feishu_webhook import sender_from_env
+from backend.tools.smtp_mail import sender_from_env as mailer_from_env
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         now=now,
         db_path=db_path,
         sender=sender_from_env(),
+        mailer=mailer_from_env(),
     )
     if result["body"]:
         print(result["body"])

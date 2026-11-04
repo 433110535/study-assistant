@@ -1,5 +1,6 @@
 """主动复习：SM-2 间隔、到期队列、本地晨间卡片。"""
 import io
+import json
 import contextlib
 import sys
 import tempfile
@@ -310,6 +311,270 @@ class TestReviewPush(unittest.TestCase):
         self.assertIn("20:00", moved)
         cards = planner.list_outbox("student", db_path=self.db)
         self.assertEqual(len(cards), 1)
+
+    def test_mailer_sends_without_marking_feishu(self):
+        from backend.platform.review_planner import run_review_push
+
+        self._seed_due()
+        mailed = []
+        result = run_review_push(
+            "student",
+            now=NOW,
+            db_path=self.db,
+            mailer=mailed.append,
+        )
+        self.assertEqual(result["channel"], "smtp")
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(mailed, [result["body"]])
+
+    def test_failed_mailer_keeps_the_card_for_retry(self):
+        from backend.platform.review_planner import run_review_push
+
+        self._seed_due()
+        calls = {"n": 0}
+
+        def mailer(body: str) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("mailbox down")
+
+        failed = run_review_push("student", now=NOW, db_path=self.db, mailer=mailer)
+        retried = run_review_push("student", now=NOW, db_path=self.db, mailer=mailer)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("mailbox down", failed["error"])
+        self.assertEqual(retried["status"], "sent")
+        self.assertEqual(retried["channel"], "smtp")
+
+    def test_reply_text_moves_due_items_to_the_evening(self):
+        from backend.platform.review_planner import get_learning_state
+        from backend.tools.review_reply import apply_review_reply
+
+        mistake_id = self._seed_due()
+        result = apply_review_reply("student", "推到晚上", now=NOW, db_path=self.db)
+        self.assertEqual(result["reason"], "rescheduled")
+        self.assertEqual(result["applied"], 1)
+        morning = get_learning_state("student", now=NOW, db_path=self.db)
+        self.assertEqual(morning["due"], [])
+        evening = get_learning_state(
+            "student",
+            now=datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc),
+            db_path=self.db,
+        )
+        self.assertEqual([item["id"] for item in evening["due"]], [mistake_id])
+
+    def test_unknown_reply_does_not_move_due_items(self):
+        from backend.platform.review_planner import get_learning_state
+        from backend.tools.review_reply import apply_review_reply, extract_reply_text
+
+        self._seed_due()
+        payload = {
+            "event": {
+                "message": {"content": json.dumps({"text": "今天天气不错"})},
+            }
+        }
+        self.assertEqual(extract_reply_text(payload), "今天天气不错")
+        result = apply_review_reply("student", payload, now=NOW, db_path=self.db)
+        self.assertEqual(result["reason"], "unrecognized")
+        self.assertEqual(result["applied"], 0)
+        due = get_learning_state("student", now=NOW, db_path=self.db)["due"]
+        self.assertEqual(len(due), 1)
+
+    def test_reply_cli_and_loopback_post(self):
+        import json as json_lib
+        import threading
+        import urllib.error
+        import urllib.request
+
+        from backend.workers.review_reply import main, make_server
+
+        self._seed_due()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(
+                [
+                    "--user",
+                    "student",
+                    "--db",
+                    str(self.db),
+                    "--now",
+                    "2026-11-04T01:00:00+00:00",
+                    "--text",
+                    "推到晚上",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("rescheduled", buf.getvalue())
+
+        server = make_server(
+            "student",
+            db_path=self.db,
+            now=NOW,
+            token="secret",
+            port=0,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/"
+            denied = urllib.request.Request(url, data="推到晚上".encode(), method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(denied, timeout=3)
+            self.assertEqual(caught.exception.code, 401)
+            allowed = urllib.request.Request(
+                url,
+                data=json_lib.dumps(
+                    {"event": {"message": {"content": json_lib.dumps({"text": "推到晚上"})}}}
+                ).encode(),
+                method="POST",
+                headers={"X-Review-Token": "secret", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(allowed, timeout=3) as response:
+                body = json_lib.loads(response.read().decode())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(body["reason"], "none_due")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+class TestSmtp(unittest.TestCase):
+    def test_missing_host_does_not_build_sender(self):
+        from backend.tools.smtp_mail import sender_from_env
+
+        self.assertIsNone(sender_from_env({}))
+        self.assertIsNone(sender_from_env({"SMTP_HOST": "localhost"}))
+
+    def test_injected_client_sends_without_opening_a_socket(self):
+        from backend.tools.smtp_mail import sender_from_env
+
+        clients = []
+
+        class Client:
+            def __init__(self, host, port, timeout=None):
+                self.host = host
+                self.port = port
+                self.timeout = timeout
+                self.started = False
+                self.login_args = None
+                self.messages = []
+                clients.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def starttls(self):
+                self.started = True
+
+            def login(self, username, password):
+                self.login_args = (username, password)
+
+            def send_message(self, message):
+                self.messages.append(message)
+
+        send = sender_from_env(
+            {
+                "SMTP_HOST": "smtp.example",
+                "SMTP_PORT": "587",
+                "SMTP_USERNAME": "student",
+                "SMTP_PASSWORD": "secret",
+                "SMTP_FROM": "bot@example.com",
+                "REVIEW_EMAIL_TO": "me@example.com",
+            },
+            smtp_factory=Client,
+        )
+        send("晨间复习 1 题")
+        self.assertEqual(len(clients), 1)
+        client = clients[0]
+        self.assertEqual((client.host, client.port), ("smtp.example", 587))
+        self.assertTrue(client.started)
+        self.assertEqual(client.login_args, ("student", "secret"))
+        self.assertEqual(client.messages[0]["To"], "me@example.com")
+        self.assertIn("晨间复习 1 题", client.messages[0].get_content())
+
+    def test_port_465_skips_starttls(self):
+        from backend.tools.smtp_mail import send_smtp_text
+
+        used = {"ssl": 0, "plain": 0}
+
+        class Client:
+            def __init__(self, host, port, timeout=None):
+                self.started = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def starttls(self):
+                self.started = True
+
+            def login(self, username, password):
+                return None
+
+            def send_message(self, message):
+                return None
+
+        def ssl_factory(*args, **kwargs):
+            used["ssl"] += 1
+            return Client(*args, **kwargs)
+
+        def plain_factory(*args, **kwargs):
+            used["plain"] += 1
+            return Client(*args, **kwargs)
+
+        send_smtp_text(
+            host="smtp.example",
+            port=465,
+            username="",
+            password="",
+            sender="bot@example.com",
+            recipient="me@example.com",
+            body="卡片",
+            smtp_factory=plain_factory,
+            smtp_ssl_factory=ssl_factory,
+        )
+        self.assertEqual(used, {"ssl": 1, "plain": 0})
+
+    def test_send_error_hides_the_password(self):
+        from backend.tools.smtp_mail import sender_from_env
+
+        class Client:
+            def __init__(self, host, port, timeout=None):
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def starttls(self):
+                return None
+
+            def login(self, username, password):
+                raise RuntimeError(f"auth failed for {password}")
+
+            def send_message(self, message):
+                return None
+
+        send = sender_from_env(
+            {
+                "SMTP_HOST": "smtp.example",
+                "SMTP_FROM": "bot@example.com",
+                "REVIEW_EMAIL_TO": "me@example.com",
+                "SMTP_USERNAME": "student",
+                "SMTP_PASSWORD": "secret",
+            },
+            smtp_factory=Client,
+        )
+        with self.assertRaises(RuntimeError) as caught:
+            send("卡片")
+        self.assertNotIn("secret", str(caught.exception))
+        self.assertIn("***", str(caught.exception))
 
 
 if __name__ == "__main__":

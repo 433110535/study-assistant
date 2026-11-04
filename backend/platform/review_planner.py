@@ -144,6 +144,7 @@ def run_review_push(
     now: Optional[datetime] = None,
     db_path: Optional[Path] = None,
     sender: Optional[Sender] = None,
+    mailer: Optional[Sender] = None,
 ) -> Dict[str, Any]:
     """生成当天晨间卡片。已成功保存或发送过的日期不会再写第二张。"""
     as_of = _as_utc(now or datetime.now(timezone.utc))
@@ -170,16 +171,7 @@ def run_review_push(
                 count=len(state["due"]),
             )
 
-        channel = "feishu" if sender is not None else "local"
-        status = "stored"
-        error = ""
-        if sender is not None:
-            try:
-                sender(body)
-                status = "sent"
-            except Exception as exc:
-                status = "failed"
-                error = str(exc)
+        status, channel, error = _deliver(body, sender, mailer)
 
         created_at = _iso(as_of)
         if existing is None:
@@ -221,6 +213,31 @@ def run_review_push(
         error=error,
         count=len(state["due"]),
     )
+
+
+def _deliver(
+    body: str,
+    sender: Optional[Sender],
+    mailer: Optional[Sender],
+) -> tuple:
+    """没有外发函数时只记本地。任一通道失败则整次记为 failed，便于再跑一次。"""
+    jobs = []
+    if sender is not None:
+        jobs.append(("feishu", sender))
+    if mailer is not None:
+        jobs.append(("smtp", mailer))
+    if not jobs:
+        return "stored", "local", ""
+    errors = []
+    for name, send in jobs:
+        try:
+            send(body)
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    channel = ",".join(name for name, _send in jobs)
+    if errors:
+        return "failed", channel, "；".join(errors)
+    return "sent", channel, ""
 
 
 def _prepare(db_path: Optional[Path]) -> Path:

@@ -186,17 +186,30 @@ def _execute_plan_review(agent) -> str:
 def _execute_send_message(agent) -> str:
     from backend.platform.review_planner import run_review_push
     from backend.tools.feishu_webhook import sender_from_env
+    from backend.tools.smtp_mail import sender_from_env as mailer_from_env
 
-    result = run_review_push(_review_user_id(agent), sender=sender_from_env())
+    result = run_review_push(
+        _review_user_id(agent),
+        sender=sender_from_env(),
+        mailer=mailer_from_env(),
+    )
     if result["reason"] == "none_due":
         return "当前没有到期复习，未发送。"
     if result["status"] == "failed":
         return f"晨间卡片外发失败：{result['error']}。内容已留在本地发件箱。"
     if result["reason"] == "already_delivered":
         return "今天的晨间卡片已保存，没有重复发送。\n" + result["body"]
-    if result["channel"] == "feishu":
+    channels = set(filter(None, str(result["channel"]).split(",")))
+    if channels == {"feishu", "smtp"}:
+        return "已保存并发送到飞书和邮箱。\n" + result["body"]
+    if channels == {"feishu"}:
         return "已保存并发送到飞书。\n" + result["body"]
-    return "已保存到本地发件箱。未配置 REVIEW_WEBHOOK_URL，所以没有外发。\n" + result["body"]
+    if channels == {"smtp"}:
+        return "已保存并发送到邮箱。\n" + result["body"]
+    return (
+        "已保存到本地发件箱。未配置 REVIEW_WEBHOOK_URL 或 SMTP，所以没有外发。\n"
+        + result["body"]
+    )
 
 
 def _execute_reschedule(agent, when_text: str, mistake_id: str = "") -> str:
@@ -702,7 +715,7 @@ def _register_all_tools() -> None:
                     "name": "send_message",
                     "description": (
                         "把今天的晨间复习卡片保存到发件箱。同一天不会重复保存。"
-                        "只有配置了 REVIEW_WEBHOOK_URL 才会发到飞书。"
+                        "配置了 REVIEW_WEBHOOK_URL 才发飞书，配置了 SMTP 才发邮件。"
                         "用户没明确要发送时不要调用。"
                     ),
                     "parameters": {"type": "object", "properties": {}},

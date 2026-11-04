@@ -2,7 +2,7 @@
 复习的常驻调度。不要放进 Streamlit 进程。
 
 每天北京时间 8:00 调用一次 review_push。同一天重复启动不会再跑。
-没有 REVIEW_WEBHOOK_URL 时，review_push 只写本地发件箱。
+没有飞书 webhook 和 SMTP 时，review_push 只写本地发件箱。
 
     python -m backend.workers.review_scheduler --user student
     python -m backend.workers.review_scheduler --once
@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from backend.platform.review_planner import run_review_push
 from backend.tools.feishu_webhook import sender_from_env
+from backend.tools.smtp_mail import sender_from_env as mailer_from_env
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 DEFAULT_HOUR = 8
@@ -68,9 +69,16 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path = Path(args.db) if args.db else None
     sender = sender_from_env()
+    mailer = mailer_from_env()
 
     def push(moment: datetime) -> dict:
-        return run_review_push(args.user, now=moment, db_path=db_path, sender=sender)
+        return run_review_push(
+            args.user,
+            now=moment,
+            db_path=db_path,
+            sender=sender,
+            mailer=mailer,
+        )
 
     if args.once:
         moment = _parse_now(args.now)

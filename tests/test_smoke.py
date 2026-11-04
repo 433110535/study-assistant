@@ -59,6 +59,7 @@ class TestDependencies(unittest.TestCase):
             "backend.agents.tool_registry",
             "backend.platform.trace_store",
             "backend.platform.code_attempt_store",
+            "backend.platform.review_planner",
         ]
         for name in modules:
             with self.subTest(module=name):

@@ -151,6 +151,29 @@ def _execute_make_variants(agent, question_text: str, count: int = 3) -> str:
     return format_variants(make_variants(question_text, count))
 
 
+def _execute_get_learning_state(agent) -> str:
+    from backend.platform.review_planner import format_state, learning_state
+
+    user_id = getattr(agent, "user_id", None) or "student"
+    return format_state(learning_state(user_id))
+
+
+def _execute_plan_review(agent) -> str:
+    from backend.platform.review_planner import format_card, list_due
+
+    user_id = getattr(agent, "user_id", None) or "student"
+    return format_card(list_due(user_id))
+
+
+def _execute_reschedule(agent, mistake_id: str, when: str) -> str:
+    from backend.platform.review_planner import reschedule
+
+    result = reschedule(mistake_id, when)
+    if not result.get("ok"):
+        return result.get("reason") or "改期失败"
+    return f"已改到 {result['next_review_at']}。这只改了本地复习时间，没有发送消息。"
+
+
 # ========== 注册工具 ==========
 
 def _register_all_tools() -> None:
@@ -581,6 +604,68 @@ def _register_all_tools() -> None:
             },
             side_effects=False,
             cost_hint="local",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="get_learning_state",
+            fn=_execute_get_learning_state,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "get_learning_state",
+                    "description": "查看当前用户的待确认错题、复习队列和今日到期数量。",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            side_effects=False,
+            cost_hint="sqlite:读",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="plan_review",
+            fn=_execute_plan_review,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "plan_review",
+                    "description": (
+                        "按到期时间列出今日要复习的错题，生成本地卡片文本。"
+                        "不会发送飞书或邮件。没有到期项时不要声称已经提醒用户。"
+                    ),
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            side_effects=False,
+            cost_hint="sqlite:读",
+        )
+    )
+    register_tool(
+        ToolSpec(
+            name="reschedule",
+            fn=_execute_reschedule,
+            schema={
+                "type": "function",
+                "function": {
+                    "name": "reschedule",
+                    "description": (
+                        "用户明确要求改期时，把一条已确认错题改到明天、晚上或若干天后。"
+                        "when 只能是「明天」「晚上」或「3天后」这种说法。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "mistake_id": {"type": "string", "description": "错题 id"},
+                            "when": {"type": "string", "description": "明天、晚上，或 N天后"},
+                        },
+                        "required": ["mistake_id", "when"],
+                    },
+                },
+            },
+            side_effects=True,
+            requires_approval=True,
+            cost_hint="sqlite:1 写",
         )
     )
 

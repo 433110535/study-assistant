@@ -2060,13 +2060,17 @@ def render_mistakes():
         list_mistakes,
     )
 
+    from backend.platform.review_planner import apply_review, latest_card, list_due, reschedule
+
     page_header("mistakes", chips=[
         "<b>写入</b> 默认待确认",
-        "<b>复习</b> 确认后次日",
+        "<b>复习</b> SM-2 到期",
     ])
     user_id = st.session_state.get("auth_user") or "student"
     pending = list_mistakes(user_id, status="pending")
     confirmed = list_mistakes(user_id, status="confirmed")
+    due = list_due(user_id)
+    card = latest_card(user_id)
 
     section_head("01", "待确认", "PENDING")
     if not pending:
@@ -2096,7 +2100,31 @@ def render_mistakes():
                     dismiss_mistake(item["id"])
                     st.rerun()
 
-    section_head("02", "复习队列", "REVIEW")
+    section_head("02", "今日到期", "DUE")
+    if card:
+        st.text(card.get("body") or "")
+        st.caption("卡片由独立脚本写入。页面打开时不会自动发消息。")
+    if not due:
+        st.caption("没有到期待复习的错题。确认后的错题会在到期日出现在这里。")
+    for item in due:
+        with st.container(border=True):
+            st.markdown(f"**{html.escape(item['concept'])}** · {html.escape(item['subject'] or '')}")
+            st.write(item.get("question_text") or "")
+            remember, again, later = st.columns(3)
+            with remember:
+                if st.button("记得", key=f"review_ok_{item['id']}"):
+                    apply_review(item["id"], 5)
+                    st.rerun()
+            with again:
+                if st.button("还不行", key=f"review_no_{item['id']}"):
+                    apply_review(item["id"], 2)
+                    st.rerun()
+            with later:
+                if st.button("推到明天", key=f"review_later_{item['id']}"):
+                    reschedule(item["id"], "明天")
+                    st.rerun()
+
+    section_head("03", "复习队列", "REVIEW")
     if not confirmed:
         empty_state("QUEUE", "复习队列为空", "确认后的错题会在次日进入复习时间。")
         return

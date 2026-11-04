@@ -54,6 +54,34 @@ class TestEvalRunner(unittest.TestCase):
         self.assertTrue(gate["passed"])
         self.assertIn("faithfulness", gate["checked"])
 
+    def test_failure_attribution_counts_missing_tools(self):
+        import json
+
+        from backend.platform.eval_runner import attribute_failures
+
+        rows = attribute_failures(
+            [
+                {
+                    "passed": False,
+                    "detail": json.dumps({"missing": ["rag_search"], "passed": False}),
+                },
+                {
+                    "passed": False,
+                    "detail": {"missing": ["rag_search", "read_image"]},
+                },
+                {"passed": True, "detail": {"missing": ["grade_item"]}},
+                {"passed": False, "detail": "schema_ok"},
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {"tool": "rag_search", "count": 2},
+                {"tool": "other", "count": 1},
+                {"tool": "read_image", "count": 1},
+            ],
+        )
+
     def test_ungrounded_sentence_fails_the_faithfulness_gate(self):
         from backend.platform.eval_runner import check_release_gate, dry_run, mean_faithfulness
 

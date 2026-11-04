@@ -141,6 +141,7 @@ def save_eval_run(
         "total": len(results),
         "accuracy": round(passed / len(results), 4) if results else 0,
         "faithfulness": None if faithfulness is None else round(faithfulness, 4),
+        "failure_attribution": attribute_failures(results),
     }
     with _connect(path) as conn:
         conn.execute(
@@ -229,6 +230,37 @@ def check_release_gate(
         "checked": checked,
         "not_checked": not_checked,
     }
+
+
+def attribute_failures(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把没通过的样本按缺失工具计数。通过的样本不计入。没有缺失列表的失败记为 other。"""
+    counts: Dict[str, int] = {}
+    for item in results:
+        if item.get("passed"):
+            continue
+        missing = _missing_tools(item.get("detail"))
+        if not missing:
+            counts["other"] = counts.get("other", 0) + 1
+            continue
+        for name in missing:
+            counts[name] = counts.get(name, 0) + 1
+    ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    return [{"tool": name, "count": count} for name, count in ranked]
+
+
+def _missing_tools(detail: Any) -> List[str]:
+    parsed = detail
+    if isinstance(detail, str):
+        try:
+            parsed = json.loads(detail)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(parsed, dict):
+        return []
+    missing = parsed.get("missing")
+    if not isinstance(missing, list):
+        return []
+    return [str(name) for name in missing if name]
 
 
 def mean_faithfulness(results: List[Dict[str, Any]]) -> Optional[float]:

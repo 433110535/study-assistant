@@ -138,6 +138,32 @@ class TestLocalApi(unittest.TestCase):
         self.assertNotIn("2x cos", plan.json()["body"])
         self.assertEqual(list_outbox("student", db_path=self.db), [])
 
+    def test_page_client_reads_the_latest_board_through_the_route(self):
+        import json
+
+        from backend.api.local_client import failure_board
+        from backend.platform.eval_runner import load_failure_board, save_eval_run
+
+        dataset = {"name": "tiny", "version": "v0", "samples": [{"id": "a"}]}
+        save_eval_run(
+            dataset,
+            "dry-run",
+            [
+                {
+                    "sample_id": "a",
+                    "passed": False,
+                    "tools_used": [],
+                    "detail": json.dumps({"missing": ["rag_search"]}),
+                    "output": "",
+                }
+            ],
+            db_path=self.db,
+        )
+        via_route = failure_board(self.db)
+        direct = load_failure_board(self.db)
+        self.assertEqual(via_route["latest"]["failure_attribution"], direct["latest"]["failure_attribution"])
+        self.assertEqual(via_route["latest"]["failure_attribution"][0]["tool"], "rag_search")
+
     def test_empty_eval_board(self):
         latest = self.client.get("/v1/eval/latest", headers=self._headers())
         self.assertEqual(latest.status_code, 200)

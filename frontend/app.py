@@ -2412,15 +2412,15 @@ def render_react_visualization():
 
 
 def render_eval_board():
-    """展示最近一次评测里按缺失工具归类的失败。不重新跑评测。"""
-    from backend.platform.eval_runner import load_failure_board
+    """展示最近一次评测。数据从本机 API 的 /v1/eval/latest 来，不直接查表。"""
+    from backend.api.local_client import failure_board
 
     page_header("eval", chips=[
-        "<b>来源</b> eval_runs",
+        "<b>来源</b> /v1/eval/latest",
         "<b>归因</b> 缺失工具",
         "<b>门禁</b> 只读展示",
     ])
-    board = load_failure_board()
+    board = failure_board()
     latest = board["latest"]
     if latest is None:
         empty_state(

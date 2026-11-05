@@ -14,7 +14,7 @@ from backend.config import TRACE_DB_PATH
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def init_chat_db(db_path: Optional[Path] = None) -> None:
@@ -80,7 +80,7 @@ def latest_session_id(user_id: str, db_path: Optional[Path] = None) -> Optional[
             """
             SELECT id FROM sessions
             WHERE user_id = ?
-            ORDER BY updated_at DESC
+            ORDER BY updated_at DESC, rowid DESC
             LIMIT 1
             """,
             (user_id,),
@@ -107,7 +107,7 @@ def list_sessions(
             """
             SELECT id, title, updated_at FROM sessions
             WHERE user_id = ?
-            ORDER BY updated_at DESC
+            ORDER BY updated_at DESC, rowid DESC
             LIMIT ?
             """,
             (user_id or "student", max(1, int(limit))),
@@ -169,7 +169,7 @@ def list_sessions_summary(
             LEFT JOIN messages m ON s.id = m.session_id
             WHERE s.user_id = ?
             GROUP BY s.id
-            ORDER BY s.updated_at DESC
+            ORDER BY s.updated_at DESC, s.rowid DESC
             LIMIT ? OFFSET ?
             """,
             (user_id or "student", max(1, int(limit)), max(0, int(offset))),

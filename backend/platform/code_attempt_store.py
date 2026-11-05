@@ -86,7 +86,9 @@ def list_attempts(
     path = Path(db_path or TRACE_DB_PATH)
     init_code_attempt_db(path)
     with _connect(path) as conn:
-        if limit is not None and limit > 0:
+        if limit is not None:
+            if limit <= 0:
+                return []
             rows = conn.execute(
                 """
                 SELECT * FROM code_attempts

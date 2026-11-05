@@ -434,12 +434,42 @@ def login_api(
     password: str,
     db_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    return request_json(
-        "POST",
-        "/v1/auth/login",
-        db_path=db_path,
-        json_body={"username": username, "password": password},
-    )
+    from fastapi.testclient import TestClient
+    from backend.api.app import create_app
+
+    app = create_app(db_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"POST /v1/auth/login -> {response.status_code}: {response.text}")
+    data = response.json()
+    token = response.cookies.get("study_session")
+    if token and "token" not in data:
+        data["token"] = token
+    return data
+
+
+def logout_api(
+    token: Optional[str] = None,
+    api_key: Optional[str] = None,
+    db_path: Optional[Path] = None,
+) -> bool:
+    from fastapi.testclient import TestClient
+    from backend.api.app import create_app
+
+    key = os.getenv("STUDY_API_KEY", "").strip() if api_key is None else api_key
+    app = create_app(db_path, api_key=key)
+    headers = {"X-API-Key": key} if key else {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    with TestClient(app) as client:
+        if token:
+            client.cookies.set("study_session", token)
+        response = client.post("/v1/auth/logout", headers=headers)
+    return response.status_code == 204
 
 
 def auth_me_api(
@@ -453,12 +483,16 @@ def auth_me_api(
     key = os.getenv("STUDY_API_KEY", "").strip() if api_key is None else api_key
     app = create_app(db_path, api_key=key)
     headers = {"X-API-Key": key} if key else {}
-    cookies = {"study_session": token} if token else {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     with TestClient(app) as client:
-        response = client.get("/v1/auth/me", headers=headers, cookies=cookies)
+        if token:
+            client.cookies.set("study_session", token)
+        response = client.get("/v1/auth/me", headers=headers)
     if response.status_code >= 400:
         raise RuntimeError(f"GET /v1/auth/me -> {response.status_code}: {response.text}")
     return response.json()
+
 
 
 def list_sessions_api(

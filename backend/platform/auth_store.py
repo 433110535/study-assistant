@@ -127,3 +127,20 @@ def revoke_web_session(
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+def cleanup_expired_sessions(db_path: Optional[Path] = None) -> int:
+    """清理已过期或已撤销的旧会话。返回删除的记录条数。"""
+    path = Path(db_path or TRACE_DB_PATH)
+    init_auth_db(path)
+    now_str = _utc_now()
+    with _connect(path) as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM web_sessions
+            WHERE expires_at <= ? OR revoked_at IS NOT NULL
+            """,
+            (now_str,),
+        )
+        conn.commit()
+        return cursor.rowcount

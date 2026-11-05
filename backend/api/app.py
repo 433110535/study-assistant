@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional
@@ -144,19 +145,23 @@ def create_app(
         app.mount("/app", StaticFiles(directory=str(dist_dir), html=True), name="web_ui")
 
     failed_login_attempts: Dict[str, list[float]] = {}
+    _rate_limit_lock = threading.Lock()
 
     def _check_rate_limit(client_id: str) -> None:
         now = time.time()
-        recent = [t for t in failed_login_attempts.get(client_id, []) if now - t < 60.0]
-        failed_login_attempts[client_id] = recent
-        if len(recent) >= 5:
-            raise HTTPException(status_code=429, detail="尝试次数过多，请稍后再试")
+        with _rate_limit_lock:
+            recent = [t for t in failed_login_attempts.get(client_id, []) if now - t < 60.0]
+            failed_login_attempts[client_id] = recent
+            if len(recent) >= 5:
+                raise HTTPException(status_code=429, detail="尝试次数过多，请稍后再试")
 
     def _record_failure(client_id: str) -> None:
-        failed_login_attempts.setdefault(client_id, []).append(time.time())
+        with _rate_limit_lock:
+            failed_login_attempts.setdefault(client_id, []).append(time.time())
 
     def _clear_failure(client_id: str) -> None:
-        failed_login_attempts.pop(client_id, None)
+        with _rate_limit_lock:
+            failed_login_attempts.pop(client_id, None)
 
     def require_key(
         request: Request,
@@ -199,13 +204,15 @@ def create_app(
         password = str(payload.get("password") or "").strip()
         expected_user = os.getenv("APP_USERNAME", "student").strip() or "student"
         expected_pass = os.getenv("APP_PASSWORD", "study2026").strip()
-        if not (hmac.compare_digest(username, expected_user) and hmac.compare_digest(password, expected_pass)):
+        if not username or not password or not expected_pass or not (
+            hmac.compare_digest(username, expected_user) and hmac.compare_digest(password, expected_pass)
+        ):
             _record_failure(client_id)
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         _clear_failure(client_id)
         token = secrets.token_urlsafe(32)
         sess = create_web_session(username, token, db_path=database)
-        resp = JSONResponse(content={"user_id": username, "expires_at": sess["expires_at"]})
+        resp = JSONResponse(content={"user_id": username, "expires_at": sess["expires_at"], "token": token})
         resp.set_cookie(
             key="study_session",
             value=token,
@@ -214,6 +221,7 @@ def create_app(
             max_age=86400 * 7,
         )
         return resp
+
 
     @app.post("/v1/auth/logout")
     def logout(request: Request, study_session: Optional[str] = Cookie(default=None)) -> Response:
@@ -234,52 +242,71 @@ def create_app(
             return {"user_id": user.get("user_id", "student"), "mode": "local"}
         return {"user_id": user.get("user_id", "student"), "mode": current_auth_mode}
 
-    @app.get("/v1/sessions", dependencies=guard)
+    @app.get("/v1/sessions")
     def list_sessions_route(
         user_id: str = "student",
         limit: int = 50,
         offset: int = 0,
+        current_user: Dict[str, Any] = Depends(require_key),
     ) -> dict:
         from backend.platform.chat_store import list_sessions_summary
 
+        effective_user = current_user["user_id"] if current_user.get("auth_type") == "session" else (user_id or "student")
         return list_sessions_summary(
-            user_id=user_id,
+            user_id=effective_user,
             limit=limit,
             offset=offset,
             db_path=database,
         )
 
-    @app.get("/v1/sessions/{session_id}/messages", dependencies=guard)
-    def get_session_messages_route(session_id: str) -> dict:
+    @app.get("/v1/sessions/{session_id}/messages")
+    def get_session_messages_route(
+        session_id: str,
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
         from backend.platform.chat_store import get_session, load_session_messages_detailed
 
         sess = get_session(session_id, db_path=database)
         if sess is None:
             raise HTTPException(status_code=404, detail="会话不存在")
+        if current_user.get("auth_type") == "session" and sess.get("user_id") != current_user.get("user_id"):
+            raise HTTPException(status_code=404, detail="会话不存在")
         messages = load_session_messages_detailed(session_id, db_path=database)
         return {"session_id": session_id, "messages": messages}
 
-    @app.post("/v1/sessions", dependencies=guard)
-    def create_session_route(payload: dict = Body(default={})) -> dict:
+    @app.post("/v1/sessions")
+    def create_session_route(
+        payload: dict = Body(default={}),
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
         from backend.platform.chat_store import start_session
 
-        user_id = str(payload.get("user_id") or "student").strip() or "student"
+        if current_user.get("auth_type") == "session":
+            user_id = current_user.get("user_id", "student")
+        else:
+            user_id = str(payload.get("user_id") or "student").strip() or "student"
         title = str(payload.get("title") or "新对话").strip() or "新对话"
         session_id = start_session(user_id=user_id, title=title, db_path=database)
         return {"session_id": session_id}
 
-    @app.post("/v1/vision/ocr", dependencies=guard)
+    @app.post("/v1/vision/ocr")
     async def vision_ocr_route(
         file: UploadFile = File(...),
         focus: str = Form(default="全部"),
+        current_user: Dict[str, Any] = Depends(require_key),
     ) -> dict:
-        filename = file.filename or "image.jpg"
-        suffix = Path(filename).suffix.lower()
+        filename = file.filename or ""
+        suffix = Path(filename).suffix.lower() if filename else ""
         allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
+        allowed_mimes = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
         content_type = (file.content_type or "").lower()
-        allowed_types = {"image/jpeg", "image/png", "image/webp", "image/jpg", "application/octet-stream"}
-        if suffix not in allowed_exts and content_type not in allowed_types:
-            raise HTTPException(status_code=400, detail="不支持的图片格式，仅支持 JPEG/PNG/WebP")
+
+        if suffix:
+            if suffix not in allowed_exts:
+                raise HTTPException(status_code=400, detail="不支持的图片格式，仅支持 JPEG/PNG/WebP")
+        else:
+            if content_type not in allowed_mimes:
+                raise HTTPException(status_code=400, detail="不支持的图片格式，仅支持 JPEG/PNG/WebP")
 
         content = await file.read()
         if not content:
@@ -299,6 +326,10 @@ def create_app(
 
                 reader = read_image
             text = reader(tmp_path, focus=focus)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"视觉模型调用失败: {e}")
         finally:
             if os.path.exists(tmp_path):
                 try:
@@ -327,12 +358,17 @@ def create_app(
             "elapsed_ms": elapsed_ms,
         }
 
-    @app.post("/v1/code/run", dependencies=guard)
-    def run_code_route(payload: dict = Body(...)) -> dict:
+    @app.post("/v1/code/run")
+    def run_code_route(
+        payload: dict = Body(...),
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
         code = str(payload.get("code") or "")
         if len(code.encode("utf-8")) > 50 * 1024 or len(code) > 50 * 1024:
             raise HTTPException(status_code=400, detail="代码长度超过 50KB 限制")
         tests = str(payload.get("tests") or "")
+        if len(tests.encode("utf-8")) > 50 * 1024 or len(tests) > 50 * 1024:
+            raise HTTPException(status_code=400, detail="测试代码长度超过 50KB 限制")
         raw_timeout = payload.get("timeout_s", 2.0)
         try:
             timeout_s = float(raw_timeout)
@@ -342,7 +378,10 @@ def create_app(
         from backend.tools.code_sandbox import run_student_code
 
         thread_id = str(payload.get("thread_id") or "").strip() or new_thread_id()
-        user_id = str(payload.get("user_id") or "student").strip() or "student"
+        if current_user.get("auth_type") == "session":
+            user_id = current_user.get("user_id", "student")
+        else:
+            user_id = str(payload.get("user_id") or "student").strip() or "student"
 
         result = run_student_code(code, tests=tests, timeout_s=timeout_s)
         append_attempt(
@@ -369,8 +408,11 @@ def create_app(
             "thread_id": thread_id,
         }
 
-    @app.post("/v1/code/hint", dependencies=guard)
-    def code_hint_route(payload: dict = Body(...)) -> dict:
+    @app.post("/v1/code/hint")
+    def code_hint_route(
+        payload: dict = Body(...),
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
         raw_level = payload.get("level", 1)
         try:
             level = int(raw_level)
@@ -382,16 +424,19 @@ def create_app(
         hint = hint_for_level(level=level, observation=observation)
         return {"hint": hint}
 
-    @app.get("/v1/code/attempts", dependencies=guard)
+    @app.get("/v1/code/attempts")
     def code_attempts_route(
         thread_id: str = "",
         user_id: str = "student",
         limit: int = 50,
+        current_user: Dict[str, Any] = Depends(require_key),
     ) -> dict:
         from backend.platform.code_attempt_store import list_attempts, latest_thread
 
-        tid = thread_id.strip() if thread_id else (latest_thread(user_id, db_path=database) or "")
-        attempts = list_attempts(user_id=user_id, thread_id=tid, limit=limit, db_path=database) if tid else []
+        effective_user = current_user["user_id"] if current_user.get("auth_type") == "session" else (user_id or "student")
+        clamped_limit = max(0, min(int(limit), 200))
+        tid = thread_id.strip() if thread_id else (latest_thread(effective_user, db_path=database) or "")
+        attempts = list_attempts(user_id=effective_user, thread_id=tid, limit=clamped_limit, db_path=database) if tid else []
         return {"thread_id": tid, "attempts": attempts}
 
     @app.get("/v1/tools", dependencies=guard)

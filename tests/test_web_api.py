@@ -16,6 +16,7 @@ from backend.platform.auth_store import (
     create_web_session,
     get_web_session,
     revoke_web_session,
+    cleanup_expired_sessions,
 )
 from backend.platform.chat_store import append_message, start_session
 
@@ -119,6 +120,39 @@ class TestF1Auth(unittest.TestCase):
         rate_res = client.post("/v1/auth/login", json={"username": "student", "password": "bad"})
         self.assertEqual(rate_res.status_code, 429)
 
+    @patch.dict(os.environ, {"APP_USERNAME": "student", "APP_PASSWORD": ""})
+    def test_empty_password_rejected_even_if_env_empty(self):
+        app = create_app(self.db, auth_mode="password")
+        client = TestClient(app)
+        res = client.post("/v1/auth/login", json={"username": "student", "password": ""})
+        self.assertEqual(res.status_code, 401)
+
+    def test_cleanup_expired_sessions(self):
+        create_web_session("student", "token_exp", ttl_seconds=-10, db_path=self.db)
+        create_web_session("student", "token_valid", ttl_seconds=3600, db_path=self.db)
+        create_web_session("student", "token_rev", ttl_seconds=3600, db_path=self.db)
+        revoke_web_session("token_rev", db_path=self.db)
+
+        deleted = cleanup_expired_sessions(db_path=self.db)
+        self.assertEqual(deleted, 2)
+        self.assertIsNotNone(get_web_session("token_valid", db_path=self.db))
+        self.assertIsNone(get_web_session("token_exp", db_path=self.db))
+
+    @patch.dict(os.environ, {"APP_USERNAME": "student", "APP_PASSWORD": "secret_pwd"})
+    def test_local_client_login_logout(self):
+        from backend.api.local_client import login_api, logout_api, auth_me_api
+
+        info = login_api("student", "secret_pwd", db_path=self.db)
+        self.assertEqual(info["user_id"], "student")
+        self.assertTrue("token" in info)
+
+        me = auth_me_api(token=info["token"], db_path=self.db)
+        self.assertEqual(me["user_id"], "student")
+
+        ok = logout_api(token=info["token"], db_path=self.db)
+        self.assertTrue(ok)
+
+
 
 class TestF2Sessions(unittest.TestCase):
     def setUp(self):
@@ -181,6 +215,33 @@ class TestF2Sessions(unittest.TestCase):
         body_b = res_b.json()
         self.assertEqual(body_b["total"], 1)
         self.assertEqual(body_b["sessions"][0]["id"], s3)
+
+    def test_session_user_isolation_strict(self):
+        # 严格校验 Cookie 登录态下的跨用户隔离
+        app = create_app(self.db, auth_mode="password")
+        client_a = TestClient(app)
+        create_web_session("student_a", "tok_a", db_path=self.db)
+        client_a.cookies.set("study_session", "tok_a")
+
+        s_b = start_session("student_b", title="B专属对话", db_path=self.db)
+        append_message(s_b, "user", "B的私密笔记", db_path=self.db)
+
+        # student_a 尝试获取 student_b 的会话列表 -> 不得泄露，仅返回 student_a 自身
+        res_list = client_a.get("/v1/sessions", params={"user_id": "student_b"})
+        self.assertEqual(res_list.status_code, 200)
+        self.assertEqual(res_list.json()["total"], 0)
+
+        # student_a 尝试直接读取 student_b 的会话消息 -> 404
+        res_msg = client_a.get(f"/v1/sessions/{s_b}/messages")
+        self.assertEqual(res_msg.status_code, 404)
+
+        # student_a 创建会话时伪造 user_id=student_b -> 强制归属为 student_a
+        create_res = client_a.post("/v1/sessions", json={"user_id": "student_b", "title": "A新建"})
+        self.assertEqual(create_res.status_code, 200)
+        new_sid = create_res.json()["session_id"]
+        from backend.platform.chat_store import get_session
+        sess_info = get_session(new_sid, db_path=self.db)
+        self.assertEqual(sess_info["user_id"], "student_a")
 
 
 class TestF3VisionOcr(unittest.TestCase):
@@ -268,6 +329,30 @@ class TestF3VisionOcr(unittest.TestCase):
             files={"file": ("test.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 20, "image/jpeg")},
         )
         self.assertEqual(res.status_code, 502)
+
+    def test_octet_stream_with_invalid_extension_rejected(self):
+        app = create_app(self.db, auth_mode="local", ocr_fn=lambda p, focus="": "ok")
+        client = TestClient(app)
+
+        # 恶意可执行文件或未知二进制即使伪装成 application/octet-stream 亦必须被拦截
+        res = client.post(
+            "/v1/vision/ocr",
+            files={"file": ("exploit.exe", b"MZ12345", "application/octet-stream")},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_ocr_reader_exception_handled(self):
+        def crash_ocr(path: str, focus: str = "全部") -> str:
+            raise RuntimeError("unexpected dashscope crash")
+
+        app = create_app(self.db, auth_mode="local", ocr_fn=crash_ocr)
+        client = TestClient(app)
+        res = client.post(
+            "/v1/vision/ocr",
+            files={"file": ("test.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 20, "image/jpeg")},
+        )
+        self.assertEqual(res.status_code, 502)
+
 
 
 class TestF4CodeTutor(unittest.TestCase):
@@ -361,6 +446,35 @@ class TestF4CodeTutor(unittest.TestCase):
         self.assertEqual(attempts[0]["code"], "x = 1")
         self.assertEqual(attempts[1]["seq"], 2)
         self.assertEqual(attempts[1]["code"], "x = 2")
+
+    def test_code_oversized_tests_rejected(self):
+        big_tests = "assert True\n" * 5000  # > 50KB
+        res = self.client.post("/v1/code/run", json={"code": "x = 1", "tests": big_tests})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("测试代码长度", res.json()["detail"])
+
+    def test_code_attempts_user_isolation(self):
+        app = create_app(self.db, auth_mode="password")
+        client_a = TestClient(app)
+        create_web_session("student_a", "tok_a", db_path=self.db)
+        client_a.cookies.set("study_session", "tok_a")
+
+        # student_b 有一次代码尝试
+        from backend.platform.code_attempt_store import append_attempt
+        append_attempt("student_b", "thread_b", "print('b code')", "", {"status": "passed"}, db_path=self.db)
+
+        # student_a 尝试查询 student_b 的记录 -> 必须被隔离为空
+        res = client_a.get("/v1/code/attempts", params={"user_id": "student_b", "thread_id": "thread_b"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["attempts"], [])
+
+    def test_code_attempts_negative_limit(self):
+        thread_id = "thread_lim"
+        self.client.post("/v1/code/run", json={"code": "x = 1", "thread_id": thread_id})
+        res = self.client.get("/v1/code/attempts", params={"thread_id": thread_id, "limit": 0})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["attempts"], [])
+
 
 
 class TestCorsAndOptions(unittest.TestCase):

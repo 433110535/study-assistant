@@ -919,10 +919,10 @@ GET  /v1/documents            文档与索引版本
 
 | ID | 接口 | 用途 | 优先级 | 验收 | 状态 |
 |---|---|---|---|---|---|
-| F1 | `POST /v1/auth/login`、`POST /v1/auth/logout`、`GET /v1/auth/me` | 登录态；单机可退回 API Key，但接口要留 | P0 | 未登录 401；登录后可读写 | ✅ 已完成（支持 local/password 双模、Cookie 会话、登出撤销、简单限流及 API Key 兼容） |
-| F2 | `GET /v1/sessions`、`GET /v1/sessions/{id}/messages`、`POST /v1/sessions` | 历史会话与刷新恢复 | P0 | 列表分页；消息顺序正确 | ✅ 已完成（支持用户隔离、更新时间倒序、分页统计与不存在 404 校验） |
-| F3 | `POST /v1/vision/ocr` | 上传图片 → 识别文本 → 可编辑 | P0 | 坏图/无 Key 有明确错误；不落临时文件 | ✅ 已完成（Multipart、类型与 5MB 体积校验、错误前缀映射为 4xx/5xx、finally 临时文件清理） |
-| F4 | `POST /v1/code/run`、`POST /v1/code/hint`、`GET /v1/code/attempts` | 代码助教 | P0 | 超时/内存/输出截断；历史可载入 | ✅ 已完成（50KB 上限校验、沙箱运行、执行历史入库、分级提示与历史顺序检索） |
+| F1 | `POST /v1/auth/login`、`POST /v1/auth/logout`、`GET /v1/auth/me` | 登录态；单机可退回 API Key，但接口要留 | P0 | 未登录 401；登录后可读写 | ✅ 已完成（支持 local/password 双模、Cookie 与 Bearer 令牌、空密码拦截、线程安全限流、登出撤销与物理 purge） |
+| F2 | `GET /v1/sessions`、`GET /v1/sessions/{id}/messages`、`POST /v1/sessions` | 历史会话与刷新恢复 | P0 | 列表分页；消息顺序正确 | ✅ 已完成（毫秒高精时间戳与 rowid 确定性排序、严格 Cookie 登录态跨用户防越权与 404 隔离） |
+| F3 | `POST /v1/vision/ocr` | 上传图片 → 识别文本 → 可编辑 | P0 | 坏图/无 Key 有明确错误；不落临时文件 | ✅ 已完成（Multipart、严禁非图片扩展名伪装 octet-stream 穿透、5MB 上限、异常映射与 finally 临时文件清理） |
+| F4 | `POST /v1/code/run`、`POST /v1/code/hint`、`GET /v1/code/attempts` | 代码助教 | P0 | 超时/内存/输出截断；历史可载入 | ✅ 已完成（50KB code/tests 双向长度校验、跨用户历史隔离、分级提示与历史顺序检索） |
 | F5 | `GET /v1/dashboard/summary` | 看板聚合 | P1 | 一次请求返回统计与最近活动 | ⬜ 待实施 |
 | F6 | `POST /v1/documents`（multipart） | PDF 上传 | P1 | 类型/大小校验；进度与失败重试 | ⬜ 待实施 |
 | F7 | `POST /v1/quiz/grade` | 习题 AI 批改 | P2 | 与现有页面结果一致；可关闭 | ⬜ 待实施 |
@@ -936,7 +936,7 @@ GET  /v1/documents            文档与索引版本
 - [ ] 401/403/422/500 有统一错误处理，不白屏
 - [ ] 上传有类型/大小/进度/失败重试
 - [ ] 关掉 Streamlit 后，核心页面仍可用
-- [x] 现有 180 个后端测试保持通过；新增接口有对应测试（总计 201 个测试全绿）
+- [x] 现有 180 个后端测试保持通过；新增接口有对应测试（总计 210 个测试全绿，严格覆盖跨用户隔离、空密防御、二进制扩展名伪装拦截与会话物理 purge）
 
 ### 11.5 推进顺序
 

@@ -120,3 +120,40 @@ def _connect(db_path: Path):
         yield conn
     finally:
         conn.close()
+
+def validate_and_clean_dataset(data: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
+    """自检并清洗评测集。拦截空问题、缺失必填字段、重复样本ID。返回 (cleaned_dict, issues_list)。"""
+    issues = []
+    name = str(data.get("name") or "").strip()
+    version = str(data.get("version") or "").strip()
+    if not name:
+        issues.append("缺少 name 字段")
+    if not version:
+        issues.append("缺少 version 字段")
+
+    raw_samples = data.get("samples") or []
+    if not isinstance(raw_samples, list):
+        issues.append("samples 必须是列表")
+        return data, issues
+
+    cleaned_samples = []
+    seen_ids = set()
+    for idx, sample in enumerate(raw_samples):
+        if not isinstance(sample, dict):
+            issues.append(f"第 {idx} 个样本非字典格式")
+            continue
+        sid = str(sample.get("id") or "").strip()
+        query = str(sample.get("query") or sample.get("input") or sample.get("question") or "").strip()
+        if not query:
+            issues.append(f"样本 {sid or idx} 缺少问题内容")
+            continue
+        if sid in seen_ids:
+            issues.append(f"发现重复样本 ID: {sid}")
+            continue
+        if sid:
+            seen_ids.add(sid)
+        cleaned_samples.append(sample)
+
+    cleaned = dict(data)
+    cleaned["samples"] = cleaned_samples
+    return cleaned, issues

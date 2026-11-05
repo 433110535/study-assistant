@@ -419,3 +419,11 @@ def list_mastery_api(
         params={"user_id": user_id},
     )
     return data.get("mastery", [])
+
+def backup_database_api(dest: Optional[str] = None, db_path: Optional[Path] = None) -> Dict[str, Any]:
+    body = {"dest": dest} if dest else {}
+    return request_json("POST", "/v1/database/backup", db_path=db_path, json_body=body)
+
+
+def restore_database_api(backup_path: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
+    return request_json("POST", "/v1/database/restore", db_path=db_path, json_body={"backup_path": backup_path})

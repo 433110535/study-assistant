@@ -434,7 +434,7 @@ def mean_faithfulness(results: List[Dict[str, Any]]) -> Optional[float]:
 def _faithfulness_for_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
     if "contexts" not in sample and "answer" not in sample:
         return {"applicable": False, "score": None, "grounded": 0, "claims": 0}
-    from backend.platform.faithfulness import score_faithfulness
+    from backend.platform.faithfulness import calibrate_faithfulness_judge, score_faithfulness
 
     return score_faithfulness(sample.get("answer") or "", sample.get("contexts") or [])
 
@@ -475,7 +475,7 @@ def passages_from_rag_result(text: str) -> List[str]:
 
 def score_live_answer(answer: str, rag_results: Optional[List[str]]) -> Dict[str, Any]:
     """没调用检索时不打分。调用了就把回答和当次片段比较，没有片段则按空上下文记。"""
-    from backend.platform.faithfulness import score_faithfulness
+    from backend.platform.faithfulness import calibrate_faithfulness_judge, score_faithfulness
 
     if not rag_results:
         return {
@@ -493,13 +493,38 @@ def score_live_answer(answer: str, rag_results: Optional[List[str]]) -> Dict[str
     return scored
 
 
-def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[str, Any]]:
+def live_run(
+    dataset: Dict[str, Any],
+    limit: Optional[int] = None,
+    max_cost_yuan: Optional[float] = None,
+) -> List[Dict[str, Any]]:
     from backend.agents.react_agent import ReActStudyAgent
 
     agent = ReActStudyAgent(verbose=False, session_id="eval")
     samples = dataset["samples"] if limit is None else dataset["samples"][:limit]
     results = []
+    cost_limit = max_cost_yuan if max_cost_yuan is not None else cost_limit_from_env()
+    total_cost = 0.0
+
     for item in samples:
+        if cost_limit is not None and cost_limit > 0 and total_cost > cost_limit:
+            results.append(
+                {
+                    "sample_id": item["id"],
+                    "passed": False,
+                    "tools_used": [],
+                    "detail": json.dumps({"circuit_breaker": "cost_limit_exceeded"}, ensure_ascii=False),
+                    "output": "评测预算已耗尽，硬熔断触发",
+                    "faithfulness": None,
+                    "faithfulness_applicable": False,
+                    "empty_context": True,
+                    "tool_results": [],
+                    "cost_yuan": 0.0,
+                    "cost_limit_yuan": cost_limit,
+                }
+            )
+            continue
+
         agent.clear_history()
         outcome = agent.react(item["input"])
         judged = score_tool_selection(item["expected_tools"], outcome.tools_used)
@@ -509,6 +534,9 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
             for step in outcome.steps
             if step.tool_result_preview
         ]
+        c_yuan = _trace_cost(outcome.trace_id)
+        if isinstance(c_yuan, (int, float)):
+            total_cost += float(c_yuan)
         results.append(
             {
                 "sample_id": item["id"],
@@ -520,8 +548,8 @@ def live_run(dataset: Dict[str, Any], limit: Optional[int] = None) -> List[Dict[
                 "faithfulness_applicable": scored["applicable"],
                 "empty_context": scored["empty_context"],
                 "tool_results": tool_results,
-                "cost_yuan": _trace_cost(outcome.trace_id),
-                "cost_limit_yuan": cost_limit_from_env(),
+                "cost_yuan": c_yuan,
+                "cost_limit_yuan": cost_limit,
             }
         )
     return results

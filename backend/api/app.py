@@ -606,6 +606,30 @@ def create_app(
     def mastery_route(user_id: str = "student") -> dict:
         return {"mastery": list_mastery(user_id, db_path=database)}
 
+    @app.post("/v1/database/backup", dependencies=guard)
+    def db_backup_route(payload: dict = Body(default={})) -> dict:
+        from backend.platform.db_backup import backup_database, count_database_records
+
+        dest_str = str(payload.get("dest") or "").strip()
+        dest_path = Path(dest_str) if dest_str else None
+        saved_path = backup_database(database, dest_path)
+        counts = count_database_records(saved_path)
+        return {"backup_path": str(saved_path), "records": counts}
+
+    @app.post("/v1/database/restore", dependencies=guard)
+    def db_restore_route(payload: dict = Body(...)) -> dict:
+        from backend.platform.db_backup import count_database_records, restore_database
+
+        backup_str = str(payload.get("backup_path") or "").strip()
+        if not backup_str:
+            raise HTTPException(status_code=400, detail="backup_path 不能为空")
+        backup_path = Path(backup_str)
+        if not backup_path.is_file():
+            raise HTTPException(status_code=404, detail="备份文件不存在")
+        restore_database(backup_path, database)
+        counts = count_database_records(database)
+        return {"restored": True, "records": counts}
+
     return app
 
 

@@ -945,8 +945,145 @@ GET  /v1/documents            文档与索引版本
 3. F7 + F8（P1/P2，约 1 天）：批改与部署。
 4. 然后才搭 `web_UI` 壳；接口未齐前不要开始页面重写。
 
+> 每一项的接口契约、测试命令和验收标准见第 12 节。把第 12 节交给执行 Agent 即可。
+
 ### 11.6 状态修正
 
 - 第 0 节“服务拆分与中台”：✅ → 🟡。
 - 10.6 的 M7：✅ → 🟡。
 - M7 回到 ✅ 的条件：F1–F4、F8 完成，核心链路 E2E 通过。
+
+---
+
+## 12. Web UI API 缺口实施规格（交给执行 Agent）
+
+> 本节是第 11 节的可执行版本。把本节交给编码 Agent，即可按 F1–F8 补齐接口。
+> 目标不是重写前端，而是让独立 Web UI 只靠 HTTP 完成“登录 → 会话 → 对话 → 识图 → 代码助教 → 看板”的核心链路。
+
+### 12.1 角色与工作目录
+
+你是本仓库的 Python / FastAPI 后端工程师。按本节实现接口缺口，不重写已有功能。
+
+- 工作目录：`F:\python_ai\智能体_local`
+- Windows，UTF-8；Python 用 `venv\Scripts\python.exe`
+- 分支：`main`；每完成一个逻辑组提交一次，不自动 push，除非远程凭据已配置
+- 不提交 `.env`、`data/app.db`、`data/uploads/`、`__pycache__/`
+
+### 12.2 开工前必读
+
+1. `说明/PLAN.md` 第 0 节（进度）、第 10 节（执行协议）、第 11 节（缺口）
+2. `backend/api/app.py`（`create_app` / `require_key` / SSE）
+3. `backend/api/local_client.py`（Streamlit 的调用方式）
+4. `backend/platform/chat_store.py`、`code_attempt_store.py`、`mistake_store.py`
+5. `backend/tools/code_sandbox.py`、`vision.py`、`question_generator.py`
+6. `backend/knowledge/knowledge_base_faiss.py`
+7. `tests/test_api.py`、`tests/test_grading.py`（测试风格）
+8. `frontend/app.py` 的 `render_qa` / `render_quiz` / `render_code_tutor` / `render_mistakes`
+
+先跑基线，确认 180 个测试通过再动手：
+
+```powershell
+venv\Scripts\python.exe -m unittest discover -s tests -v
+venv\Scripts\python.exe -m compileall -q backend frontend tests
+```
+
+### 12.3 总原则
+
+- 不破坏现有接口与测试；新接口优先复用现有 store / tool。
+- API Key、密码不进代码与日志；只更新 `.env.example`。
+- 上传与临时文件要校验类型/大小，`finally` 清理。
+- 每个 F 项完成后补测试，并更新 11.3 的状态与 10.6 的 M7。
+- 提交信息用 `feat(api): ...` / `fix(api): ...`。
+
+### 12.4 F1 登录态（P0）
+
+保留现有 `X-API-Key`，新增可选的会话登录。
+
+- 新增 env：`AUTH_MODE=local|password`，默认 `local`；`APP_USERNAME` / `APP_PASSWORD` 已在 `.env.example`。
+- `local` 模式：`GET /v1/auth/me` 返回 `{"user_id":"student","mode":"local"}`，现有接口行为不变。
+- `password` 模式：
+  - `POST /v1/auth/login` body `{username,password}`：`hmac.compare_digest` 校验 env；成功后生成 `secrets.token_urlsafe`，把 token 的 sha256 存入 `web_sessions(token_hash,user_id,created_at,expires_at,revoked_at)`；返回 `{user_id,expires_at}`，设置 HttpOnly + SameSite=Lax 的 `study_session` Cookie。
+  - `POST /v1/auth/logout`：撤销 token、清 Cookie、返回 204。
+  - `GET /v1/auth/me`：校验 Cookie 或 API Key；无效 401。
+  - 受保护接口同时接受 Cookie 与 `X-API-Key`；不要破坏 `create_app(..., api_key="secret")` 的现有测试。
+- 登录失败做简单限流；错误信息不区分“用户不存在/密码错误”。
+- 测试：local 模式 me、password 登录/登出/过期/错误密码、API Key 兼容。
+
+### 12.5 F2 会话历史（P0）
+
+- `GET /v1/sessions?user_id=student&limit=50&offset=0` → `{sessions:[{id,title,created_at,updated_at,message_count}],total}`，按更新时间倒序。
+- `GET /v1/sessions/{session_id}/messages` → `{session_id,messages:[{role,content,created_at}]}`；不存在 404。
+- `POST /v1/sessions` body `{user_id?,title?}` → `{session_id}`。
+- 复用 `chat_store.list_sessions / load_messages / start_session`，按 `user_id` 过滤，不泄露他人会话。
+- 测试：空列表、分页、404、用户隔离。
+
+### 12.6 F3 图片 OCR（P0）
+
+- `POST /v1/vision/ocr` multipart：`file`（必填）、`focus`（可选）。
+- 限制 jpeg/png/webp、≤5MB；保存临时文件，调用 `backend.tools.vision.read_image(path, focus)`，`finally` 删除。
+- 返回 `{text,model,elapsed_ms}`。
+- `read_image` 目前用字符串表示错误（图片不存在 / 未配置 Key / 视觉模型失败等）。把这些前缀映射为 4xx/5xx + `{detail}`，不要 200 返回错误字符串。
+- 测试 mock `read_image`，覆盖成功、坏文件、超限、无 Key。
+
+### 12.7 F4 代码助教（P0）
+
+- `POST /v1/code/run` body `{code,tests?,timeout_s?,thread_id?,user_id?}`：
+  - 复用 `code_sandbox.run_student_code`；代码上限 50KB，超时交给现有 `_clamp_timeout`。
+  - 结果写入 `code_attempt_store.append_attempt`；缺省 thread_id 时新建。
+  - 返回 `{status,stdout,stderr,exit_code,duration_ms,timed_out,thread_id}`。
+- `POST /v1/code/hint` body `{code?,observation?,level}`：复用 `hint_for_level`，返回 `{hint}`。
+- `GET /v1/code/attempts?thread_id=&user_id=&limit=`：复用 `list_attempts`。
+- 测试：正常运行、断言失败、超时、输出截断、历史顺序。
+
+### 12.8 F5 看板聚合（P1）
+
+- `GET /v1/dashboard/summary?user_id=student`：
+  - 会话数、消息数、文档数、错题（待确认/已确认/今日到期）、掌握度均值与分布、最近 5 次 run、最近一次评测摘要。
+  - 复用现有 store，避免逐条查询；一次请求返回。
+- 测试：空库、有数据、用户隔离。
+
+### 12.9 F6 文档上传（P1）
+
+- 新增 `POST /v1/documents/upload`（multipart：`file`、`subject?`），保留现有 `POST /v1/documents` 的 JSON 行为。
+- 校验 PDF 类型与 ≤20MB；保存临时文件；调用 `FAISSKnowledgeBase.add_pdf`；`finally` 删除；返回 `{doc_id,pages,chunks,title}`。
+- 若现有 `/v1/documents` 已支持 multipart，只补测试与文档，不重复实现。
+- 测试可用 `tests/fixtures/sample.pdf`；FAISS 写入慢时 mock `add_pdf`。
+
+### 12.10 F7 习题 AI 批改（P2）
+
+- 把 `frontend/app.py` 的 `render_quiz` 中 `get_llm()` 组 prompt 的逻辑移到 `backend/tools/question_generator.py`，新增 `grade_quiz(questions, answers, llm=None)`。
+- 新增 `POST /v1/quiz/grade` body `{questions,answers}`，返回 `{feedback}`；无 API Key 时 503。
+- Streamlit 可继续用旧路径，但新接口要有测试（mock LLM）。
+- 离线判分仍以 `/v1/items/grade` 为准，不要混用。
+
+### 12.11 F8 CORS 与静态托管（P0）
+
+- 在 `create_app` 加 `CORSMiddleware`；`CORS_ORIGINS` 默认 `http://localhost:5173,http://127.0.0.1:5173`，`allow_credentials=True`，不要用 `*`。
+- 如果 `web_UI/dist` 存在，挂到 `/app`（不要挂 `/`，避免遮住 `/v1`），并为 SPA 做 fallback；不存在时跳过，不报错。
+- `.env.example` 补 `AUTH_MODE`、`CORS_ORIGINS`、`MAX_UPLOAD_MB`。
+- 测试：OPTIONS 预检、`/health` 不受影响、静态目录缺失时正常启动。
+
+### 12.12 验收
+
+- 新增接口都有测试；`unittest discover` 全绿（180+ 新增）。
+- 现有 Streamlit 行为不变；`local_client` 仍可用。
+- 前端可以只靠 HTTP 完成：登录态 → 会话列表 → 对话 → 图片 OCR → 代码运行/提示 → 看板。
+- 11.3 的 F1–F8 状态更新；M7 仍为 🟡，直到 F1–F4、F8 完成且 E2E 通过。
+- README 的“规划中”同步更新。
+
+### 12.13 汇报与阻塞
+
+每完成一个 F 项，按以下结构汇报：
+
+1. 改动文件
+2. 新增/修改接口与请求/响应示例
+3. 测试命令与结果
+4. 风险与未完成项
+5. PLAN 状态更新
+6. 下一个 F 项
+
+阻塞处理：
+
+- `APP_PASSWORD` 未配置：默认 local 模式，不要阻塞。
+- `web_UI` 目录不存在：只实现条件挂载，不创建前端代码。
+- 多租户 / RBAC / Postgres：超出本节范围，记录到 PLAN 等待决策。

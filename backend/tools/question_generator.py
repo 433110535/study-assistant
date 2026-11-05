@@ -156,6 +156,51 @@ def check_answer(
         return f"检查答案失败: {str(e)}"
 
 
+
+
+def grade_quiz(
+    questions: str,
+    answers: str,
+    llm=None
+) -> str:
+    """
+    根据题目批改学生的答案。
+    将原 frontend/app.py render_quiz 的 LLM 批改逻辑收敛到后端。
+    """
+    q_text = (questions or "").strip()
+    a_text = (answers or "").strip()
+    if not q_text or not a_text:
+        return "题目或答案为空"
+
+    import os
+    if llm is None and not os.getenv("DASHSCOPE_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        return "未配置 API KEY，无法调用批改模型"
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """你是一位严格的老师。请根据以下题目批改学生的答案。
+
+逐题判断对错，给出正确答案和简要解析，最后给出总分（X/Y）。
+
+输出格式：
+| 题号 | 学生答案 | 正确/错误 | 正确答案 | 解析 |
+|------|---------|----------|---------|------|
+
+总分: X/Y"""),
+        ("human", "[题目]\n{questions}\n\n[学生答案]\n{answers}")
+    ])
+
+    _llm = llm or get_llm(temperature=0.3)
+    chain = prompt | _llm
+    try:
+        response = chain.invoke({
+            "questions": q_text,
+            "answers": a_text,
+        })
+        return text_content(response.content)
+    except Exception as e:
+        return f"批改失败: {str(e)}"
+
+
 # 测试
 if __name__ == "__main__":
     # 测试生成题目

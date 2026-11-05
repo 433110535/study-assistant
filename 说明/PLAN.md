@@ -925,7 +925,7 @@ GET  /v1/documents            文档与索引版本
 | F4 | `POST /v1/code/run`、`POST /v1/code/hint`、`GET /v1/code/attempts` | 代码助教 | P0 | 超时/内存/输出截断；历史可载入 | ✅ 已完成（50KB code/tests 双向长度校验、跨用户历史隔离、分级提示与历史顺序检索） |
 | F5 | GET /v1/dashboard/summary | 看板聚合 | P1 | 一次请求返回统计与最近活动 | ✅ 已完成（标量子查询消灭笛卡尔积、COALESCE防空表NULL、INNER JOIN sessions隔离用户运行历史、容错降级不崩溃） |
 | F6 | POST /v1/documents/upload | PDF 上传 | P1 | 类型/大小校验；进度与失败重试 | ✅ 已完成（Multipart流式分块写入、%PDF-魔数校验、20MB硬限、扫描件空文本拦截422、asyncio.to_thread异步切片与SQLite documents表双写同步） |
-| F7 | `POST /v1/quiz/grade` | 习题 AI 批改 | P2 | 与现有页面结果一致；可关闭 | ⬜ 待实施 |
+| F7 | POST /v1/quiz/grade | 习题 AI 批改 | P2 | 与现有页面结果一致；可关闭 | ✅ 已完成（收敛 Streamlit 页面提示词至 backend.tools.question_generator.grade_quiz，空题拦截与20000字上限、未配置 Key 时 503 优雅降级、异常映射 502） |
 | F8 | CORS + 静态托管 | 前后端分离 | P0 | dev 代理 `/v1`；生产同源 | ✅ 已完成（CORS_ORIGINS 白名单允许凭证、条件挂载 web_UI/dist 至 /app） |
 
 ### 11.4 前端独立化验收

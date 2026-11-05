@@ -755,5 +755,74 @@ class TestF6DocumentsUpload(unittest.TestCase):
         self.assertEqual(dash_res.json()["overview"]["document_count"], 1)
 
 
+
+class TestF7QuizGrade(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "app.db"
+
+    def tearDown(self):
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
+
+    def test_quiz_grade_blank_inputs_rejected(self):
+        app = create_app(self.db, auth_mode="local")
+        client = TestClient(app)
+
+        res1 = client.post("/v1/quiz/grade", json={"questions": "", "answers": "我的答案"})
+        self.assertEqual(res1.status_code, 400)
+        self.assertIn("questions 不能为空", res1.json()["detail"])
+
+        res2 = client.post("/v1/quiz/grade", json={"questions": "1+1=?", "answers": ""})
+        self.assertEqual(res2.status_code, 400)
+        self.assertIn("answers 不能为空", res2.json()["detail"])
+
+    def test_quiz_grade_oversized_rejected(self):
+        app = create_app(self.db, auth_mode="local")
+        client = TestClient(app)
+
+        big_text = "题目 " * 10000
+        res = client.post("/v1/quiz/grade", json={"questions": big_text, "answers": "1"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("超出最大长度限制", res.json()["detail"])
+
+    def test_quiz_grade_unconfigured_api_key_503(self):
+        app = create_app(self.db, auth_mode="local")
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "", "OPENAI_API_KEY": ""}):
+            res = client.post("/v1/quiz/grade", json={"questions": "1+1=?", "answers": "2"})
+            self.assertEqual(res.status_code, 503)
+            self.assertIn("未配置", res.json()["detail"])
+
+    def test_quiz_grade_success(self):
+        def mock_grader(questions, answers):
+            return f"| 1 | {answers} | 正确 | 2 | 基础算术 |\n\n总分: 1/1"
+
+        app = create_app(self.db, auth_mode="local", quiz_grade_fn=mock_grader)
+        client = TestClient(app)
+
+        res = client.post("/v1/quiz/grade", json={"questions": "1+1=?", "answers": "2"})
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("feedback", data)
+        self.assertIn("总分: 1/1", data["feedback"])
+
+    def test_quiz_grade_model_exception_mapped_to_502(self):
+        def failing_grader(questions, answers):
+            raise RuntimeError("Remote LLM Connection Timeout")
+
+        app = create_app(self.db, auth_mode="local", quiz_grade_fn=failing_grader)
+        client = TestClient(app)
+
+        res = client.post("/v1/quiz/grade", json={"questions": "1+1=?", "answers": "2"})
+        self.assertEqual(res.status_code, 502)
+        self.assertIn("批改模型调用失败", res.json()["detail"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

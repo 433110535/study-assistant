@@ -122,6 +122,7 @@ def create_app(
     rag_ask_fn: Optional[Callable[..., str]] = None,
     auth_mode: Optional[str] = None,
     ocr_fn: Optional[Callable[..., str]] = None,
+    quiz_grade_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     init_domain_db(database)
@@ -761,6 +762,40 @@ def create_app(
         resp["collected_mistake_ids"] = collected_ids
         resp["collected_count"] = len(collected_ids)
         return resp
+
+    
+    @app.post("/v1/quiz/grade")
+    def quiz_grade_route(
+        payload: dict = Body(...),
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
+        questions = str(payload.get("questions") or "").strip()
+        answers = str(payload.get("answers") or "").strip()
+        if not questions:
+            raise HTTPException(status_code=400, detail="questions 不能为空")
+        if not answers:
+            raise HTTPException(status_code=400, detail="answers 不能为空")
+        if len(questions) > 20000 or len(answers) > 20000:
+            raise HTTPException(status_code=400, detail="题目或答案超出最大长度限制")
+
+        import os
+        if not os.getenv("DASHSCOPE_API_KEY") and not os.getenv("OPENAI_API_KEY") and quiz_grade_fn is None:
+            raise HTTPException(status_code=503, detail="未配置模型 API KEY，无法调用习题批改服务")
+
+        grader = quiz_grade_fn
+        if grader is None:
+            from backend.tools.question_generator import grade_quiz
+            grader = grade_quiz
+
+        try:
+            feedback = grader(questions=questions, answers=answers)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"批改模型调用失败: {e}")
+
+        if feedback.startswith("未配置 API KEY"):
+            raise HTTPException(status_code=503, detail=feedback)
+
+        return {"feedback": feedback}
 
     @app.post("/v1/items/grade", dependencies=guard)
     def grade_one(payload: dict = Body(...)) -> dict:

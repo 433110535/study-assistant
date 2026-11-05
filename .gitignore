@@ -65,3 +65,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Frontend Web UI
+web_UI/node_modules/
+web_UI/dist/

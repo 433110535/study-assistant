@@ -137,6 +137,81 @@ def load_messages(session_id: str, db_path: Optional[Path] = None) -> List[Dict[
     return [{"role": row["role"], "content": row["content"]} for row in rows]
 
 
+def get_session(session_id: str, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    path = Path(db_path or TRACE_DB_PATH)
+    init_chat_db(path)
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT id, user_id, title, created_at, updated_at FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_sessions_summary(
+    user_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    path = Path(db_path or TRACE_DB_PATH)
+    init_chat_db(path)
+    with _connect(path) as conn:
+        total_row = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = ?",
+            (user_id or "student",),
+        ).fetchone()
+        total = int(total_row[0]) if total_row else 0
+        rows = conn.execute(
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count
+            FROM sessions s
+            LEFT JOIN messages m ON s.id = m.session_id
+            WHERE s.user_id = ?
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id or "student", max(1, int(limit)), max(0, int(offset))),
+        ).fetchall()
+    sessions = [
+        {
+            "id": row["id"],
+            "title": row["title"] or "新对话",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "message_count": int(row["message_count"]),
+        }
+        for row in rows
+    ]
+    return {"sessions": sessions, "total": total}
+
+
+def load_session_messages_detailed(
+    session_id: str,
+    db_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    path = Path(db_path or TRACE_DB_PATH)
+    init_chat_db(path)
+    with _connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at FROM messages
+            WHERE session_id = ?
+            ORDER BY id ASC
+            """,
+            (session_id,),
+        ).fetchall()
+    return [
+        {
+            "role": row["role"],
+            "content": row["content"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
 def append_message(
     session_id: str,
     role: str,
@@ -175,3 +250,4 @@ def append_message(
                 (now, session_id),
             )
         conn.commit()
+

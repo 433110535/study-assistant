@@ -64,12 +64,13 @@
 - **评测基线**：默认集 `eval/datasets/qa_baseline_v5.json` 共 100 条（v1–v4 仍保留）。`python -m backend.platform.eval_runner --dry-run` 不调用模型，会打工具选择，并对 16 条检索题用固定片段打忠实度。`--live` 才调用模型。调用了 `rag_search` 时，用当次检索正文打忠实度；没检索的题不记分。传入或算出的忠实度低于 0.85 会拦截。
 - **失败归因**：侧栏「失败归因」读取最近一次 `eval_runs`。工具没选对时按缺失工具计数；检索没有正文记为检索为空；忠实度低于 0.85 记为答案不忠实；工具返回里的「执行超时」记为超时。设置 `EVAL_MAX_COST_YUAN` 后，超过该费用才记为成本超限。
 - **本机 API**：`python -m backend.api` 在 `127.0.0.1:8000` 提供工具列表、trace、错题确认和复习卡片。配置 `STUDY_API_KEY` 后，`/v1` 要求 `X-API-Key`。失败归因页请求 `/v1/eval/latest`。错题页的列表、确认、丢弃、到期、改期和保存卡片都走本机 API；保存卡片不外发。问答发送请求 `POST /v1/chat/stream`，并沿用页面上的同一个 Agent。知识讲解请求 `POST /v1/explain`。概念对比请求 `POST /v1/compare`。习题出题请求 `POST /v1/questions`。学习计划请求 `POST /v1/plans`。日程请求 `POST /v1/schedules`。整卷判分请求 `POST /v1/papers/grade`。单题对照请求 `POST /v1/items/grade`。知识库页的列表、检索和 RAG 问答也已走 `/v1/documents`。`copy_database` 可备份并恢复这个库。
+- **独立 Web UI 核心 API（F1–F4 与 CORS）**：为前后端分离与独立 Web UI 建设提供 HTTP 契约支持。包含基于 Cookie 会话与密码/本地双模认证（`/v1/auth/*`，带限流与 API Key 兼容）、会话列表历史与恢复（`/v1/sessions*`）、图片上传 OCR（`POST /v1/vision/ocr`，Multipart、格式与 5MB 校验、错误码映射）、代码执行助教（`POST /v1/code/run`、`POST /v1/code/hint`、`GET /v1/code/attempts`），以及配置化 CORS 白名单与 `/app` 静态托管挂载支持。
 
 ### 规划中
 
 - 拍照批改的真实试卷验收，以及真实飞书 webhook 验收
 - 代码助教的容器隔离（64MB 内存上限已有）
-- Web UI 所需接口：登录态、会话列表、识图 OCR、代码运行/提示、看板聚合
+- Web UI 页面实现与看板聚合（F5）、文档上传（F6）、习题 AI 批改（F7）接口
 - 剩余直连页面的 API 化，以及 Postgres / MinIO
 
 ---

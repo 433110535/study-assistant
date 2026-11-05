@@ -81,18 +81,30 @@ def list_attempts(
     user_id: str,
     thread_id: str,
     db_path: Optional[Path] = None,
+    limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     path = Path(db_path or TRACE_DB_PATH)
     init_code_attempt_db(path)
     with _connect(path) as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM code_attempts
-            WHERE user_id = ? AND thread_id = ?
-            ORDER BY seq ASC
-            """,
-            (user_id or "student", thread_id),
-        ).fetchall()
+        if limit is not None and limit > 0:
+            rows = conn.execute(
+                """
+                SELECT * FROM code_attempts
+                WHERE user_id = ? AND thread_id = ?
+                ORDER BY seq ASC
+                LIMIT ?
+                """,
+                (user_id or "student", thread_id, int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM code_attempts
+                WHERE user_id = ? AND thread_id = ?
+                ORDER BY seq ASC
+                """,
+                (user_id or "student", thread_id),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 

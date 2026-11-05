@@ -427,3 +427,133 @@ def backup_database_api(dest: Optional[str] = None, db_path: Optional[Path] = No
 
 def restore_database_api(backup_path: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
     return request_json("POST", "/v1/database/restore", db_path=db_path, json_body={"backup_path": backup_path})
+
+
+def login_api(
+    username: str,
+    password: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "POST",
+        "/v1/auth/login",
+        db_path=db_path,
+        json_body={"username": username, "password": password},
+    )
+
+
+def auth_me_api(
+    token: Optional[str] = None,
+    api_key: Optional[str] = None,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    from fastapi.testclient import TestClient
+    from backend.api.app import create_app
+
+    key = os.getenv("STUDY_API_KEY", "").strip() if api_key is None else api_key
+    app = create_app(db_path, api_key=key)
+    headers = {"X-API-Key": key} if key else {}
+    cookies = {"study_session": token} if token else {}
+    with TestClient(app) as client:
+        response = client.get("/v1/auth/me", headers=headers, cookies=cookies)
+    if response.status_code >= 400:
+        raise RuntimeError(f"GET /v1/auth/me -> {response.status_code}: {response.text}")
+    return response.json()
+
+
+def list_sessions_api(
+    user_id: str = "student",
+    limit: int = 50,
+    offset: int = 0,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "GET",
+        "/v1/sessions",
+        db_path=db_path,
+        params={"user_id": user_id, "limit": limit, "offset": offset},
+    )
+
+
+def get_session_messages_api(
+    session_id: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "GET",
+        f"/v1/sessions/{session_id}/messages",
+        db_path=db_path,
+    )
+
+
+def create_session_api(
+    user_id: str = "student",
+    title: str = "新对话",
+    db_path: Optional[Path] = None,
+) -> str:
+    res = request_json(
+        "POST",
+        "/v1/sessions",
+        db_path=db_path,
+        json_body={"user_id": user_id, "title": title},
+    )
+    return res.get("session_id", "")
+
+
+def ocr_image_api(
+    image_bytes: bytes,
+    filename: str = "image.jpg",
+    focus: str = "全部",
+    db_path: Optional[Path] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    from fastapi.testclient import TestClient
+    from backend.api.app import create_app
+
+    key = os.getenv("STUDY_API_KEY", "").strip() if api_key is None else api_key
+    app = create_app(db_path, api_key=key)
+    headers = {"X-API-Key": key} if key else {}
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/vision/ocr",
+            files={"file": (filename, image_bytes, "image/jpeg")},
+            data={"focus": focus},
+            headers=headers,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"POST /v1/vision/ocr -> {response.status_code}: {response.text}")
+    return response.json()
+
+
+def run_code_api(
+    code: str,
+    tests: str = "",
+    timeout_s: float = 2.0,
+    thread_id: str = "",
+    user_id: str = "student",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"code": code, "tests": tests, "timeout_s": timeout_s, "user_id": user_id}
+    if thread_id:
+        body["thread_id"] = thread_id
+    return request_json("POST", "/v1/code/run", db_path=db_path, json_body=body)
+
+
+def code_hint_api(
+    level: int = 1,
+    observation: str = "",
+    db_path: Optional[Path] = None,
+) -> str:
+    res = request_json("POST", "/v1/code/hint", db_path=db_path, json_body={"level": level, "observation": observation})
+    return res.get("hint", "")
+
+
+def list_code_attempts_api(
+    thread_id: str = "",
+    user_id: str = "student",
+    limit: int = 50,
+    db_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    res = request_json("GET", "/v1/code/attempts", db_path=db_path, params={"thread_id": thread_id, "user_id": user_id, "limit": limit})
+    return res.get("attempts", [])
+

@@ -6,17 +6,30 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import secrets
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional
 
 from datetime import datetime
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import Body, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.config import TRACE_DB_PATH
+from backend.platform.auth_store import (
+    init_auth_db,
+    create_web_session,
+    get_web_session,
+    revoke_web_session,
+)
+from backend.platform.chat_store import init_chat_db
+from backend.platform.code_attempt_store import init_code_attempt_db
 from backend.platform.domain_store import (
     init_domain_db,
     add_document_record,
@@ -104,20 +117,282 @@ def create_app(
     paper_fn: Optional[Callable[..., Dict[str, Any]]] = None,
     kb_factory: Optional[Callable[[], Any]] = None,
     rag_ask_fn: Optional[Callable[..., str]] = None,
+    auth_mode: Optional[str] = None,
+    ocr_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     init_domain_db(database)
+
+    current_auth_mode = (auth_mode if auth_mode is not None else os.getenv("AUTH_MODE", "local")).strip().lower()
+
     app = FastAPI(title="学习助手", version="0.1.0")
 
-    def require_key(x_api_key: str = Header(default="")) -> None:
-        if api_key and x_api_key != api_key:
+    cors_origins_raw = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    dist_dir = Path("web_UI/dist")
+    if dist_dir.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/app", StaticFiles(directory=str(dist_dir), html=True), name="web_ui")
+
+    failed_login_attempts: Dict[str, list[float]] = {}
+
+    def _check_rate_limit(client_id: str) -> None:
+        now = time.time()
+        recent = [t for t in failed_login_attempts.get(client_id, []) if now - t < 60.0]
+        failed_login_attempts[client_id] = recent
+        if len(recent) >= 5:
+            raise HTTPException(status_code=429, detail="尝试次数过多，请稍后再试")
+
+    def _record_failure(client_id: str) -> None:
+        failed_login_attempts.setdefault(client_id, []).append(time.time())
+
+    def _clear_failure(client_id: str) -> None:
+        failed_login_attempts.pop(client_id, None)
+
+    def require_key(
+        request: Request,
+        x_api_key: str = Header(default=""),
+        study_session: Optional[str] = Cookie(default=None),
+    ) -> Dict[str, Any]:
+        if api_key and x_api_key:
+            if hmac.compare_digest(x_api_key, api_key):
+                return {"user_id": "student", "auth_type": "api_key"}
             raise HTTPException(status_code=401, detail="需要 X-API-Key")
+
+        token = study_session
+        if not token:
+            auth_hdr = request.headers.get("Authorization", "")
+            if auth_hdr.startswith("Bearer "):
+                token = auth_hdr[7:].strip()
+        if token:
+            sess = get_web_session(token, db_path=database)
+            if sess:
+                return {"user_id": sess["user_id"], "auth_type": "session"}
+
+        if api_key:
+            raise HTTPException(status_code=401, detail="需要 X-API-Key")
+        if current_auth_mode == "password":
+            raise HTTPException(status_code=401, detail="未登录")
+
+        return {"user_id": "student", "auth_type": "local"}
 
     guard = [Depends(require_key)]
 
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.post("/v1/auth/login")
+    def login(request: Request, payload: dict = Body(...)) -> Response:
+        client_id = request.client.host if request.client else "local"
+        _check_rate_limit(client_id)
+        username = str(payload.get("username") or "").strip()
+        password = str(payload.get("password") or "").strip()
+        expected_user = os.getenv("APP_USERNAME", "student").strip() or "student"
+        expected_pass = os.getenv("APP_PASSWORD", "study2026").strip()
+        if not (hmac.compare_digest(username, expected_user) and hmac.compare_digest(password, expected_pass)):
+            _record_failure(client_id)
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        _clear_failure(client_id)
+        token = secrets.token_urlsafe(32)
+        sess = create_web_session(username, token, db_path=database)
+        resp = JSONResponse(content={"user_id": username, "expires_at": sess["expires_at"]})
+        resp.set_cookie(
+            key="study_session",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            max_age=86400 * 7,
+        )
+        return resp
+
+    @app.post("/v1/auth/logout")
+    def logout(request: Request, study_session: Optional[str] = Cookie(default=None)) -> Response:
+        token = study_session
+        if not token:
+            auth_hdr = request.headers.get("Authorization", "")
+            if auth_hdr.startswith("Bearer "):
+                token = auth_hdr[7:].strip()
+        if token:
+            revoke_web_session(token, db_path=database)
+        resp = Response(status_code=204)
+        resp.delete_cookie(key="study_session")
+        return resp
+
+    @app.get("/v1/auth/me")
+    def auth_me(user: Dict[str, Any] = Depends(require_key)) -> dict:
+        if current_auth_mode == "local":
+            return {"user_id": user.get("user_id", "student"), "mode": "local"}
+        return {"user_id": user.get("user_id", "student"), "mode": current_auth_mode}
+
+    @app.get("/v1/sessions", dependencies=guard)
+    def list_sessions_route(
+        user_id: str = "student",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        from backend.platform.chat_store import list_sessions_summary
+
+        return list_sessions_summary(
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+            db_path=database,
+        )
+
+    @app.get("/v1/sessions/{session_id}/messages", dependencies=guard)
+    def get_session_messages_route(session_id: str) -> dict:
+        from backend.platform.chat_store import get_session, load_session_messages_detailed
+
+        sess = get_session(session_id, db_path=database)
+        if sess is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        messages = load_session_messages_detailed(session_id, db_path=database)
+        return {"session_id": session_id, "messages": messages}
+
+    @app.post("/v1/sessions", dependencies=guard)
+    def create_session_route(payload: dict = Body(default={})) -> dict:
+        from backend.platform.chat_store import start_session
+
+        user_id = str(payload.get("user_id") or "student").strip() or "student"
+        title = str(payload.get("title") or "新对话").strip() or "新对话"
+        session_id = start_session(user_id=user_id, title=title, db_path=database)
+        return {"session_id": session_id}
+
+    @app.post("/v1/vision/ocr", dependencies=guard)
+    async def vision_ocr_route(
+        file: UploadFile = File(...),
+        focus: str = Form(default="全部"),
+    ) -> dict:
+        filename = file.filename or "image.jpg"
+        suffix = Path(filename).suffix.lower()
+        allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
+        content_type = (file.content_type or "").lower()
+        allowed_types = {"image/jpeg", "image/png", "image/webp", "image/jpg", "application/octet-stream"}
+        if suffix not in allowed_exts and content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="不支持的图片格式，仅支持 JPEG/PNG/WebP")
+
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="上传图片为空")
+        if len(content) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="图片大小超过 5MB 限制")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".jpg") as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        t0 = time.perf_counter()
+        try:
+            reader = ocr_fn
+            if reader is None:
+                from backend.tools.vision import read_image
+
+                reader = read_image
+            text = reader(tmp_path, focus=focus)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        if not isinstance(text, str):
+            text = str(text)
+
+        if text.startswith("未配置 DASHSCOPE_API_KEY"):
+            raise HTTPException(status_code=503, detail=text)
+        if text.startswith("图片不存在或不可读"):
+            raise HTTPException(status_code=400, detail=text)
+        if text.startswith("读取图片失败") or text.startswith("图片预处理失败"):
+            raise HTTPException(status_code=400, detail=text)
+        if text.startswith("视觉模型调用失败") or text.startswith("视觉模型返回错误"):
+            raise HTTPException(status_code=502, detail=text)
+        if text.startswith("未能从模型响应中解析识别文本"):
+            raise HTTPException(status_code=502, detail=text)
+
+        return {
+            "text": text,
+            "model": os.getenv("VISION_MODEL", "qwen-vl-max"),
+            "elapsed_ms": elapsed_ms,
+        }
+
+    @app.post("/v1/code/run", dependencies=guard)
+    def run_code_route(payload: dict = Body(...)) -> dict:
+        code = str(payload.get("code") or "")
+        if len(code.encode("utf-8")) > 50 * 1024 or len(code) > 50 * 1024:
+            raise HTTPException(status_code=400, detail="代码长度超过 50KB 限制")
+        tests = str(payload.get("tests") or "")
+        raw_timeout = payload.get("timeout_s", 2.0)
+        try:
+            timeout_s = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout_s = 2.0
+        from backend.platform.code_attempt_store import new_thread_id, append_attempt
+        from backend.tools.code_sandbox import run_student_code
+
+        thread_id = str(payload.get("thread_id") or "").strip() or new_thread_id()
+        user_id = str(payload.get("user_id") or "student").strip() or "student"
+
+        result = run_student_code(code, tests=tests, timeout_s=timeout_s)
+        append_attempt(
+            user_id=user_id,
+            thread_id=thread_id,
+            code=code,
+            tests=tests,
+            result=result,
+            db_path=database,
+        )
+
+        status = result.get("status") or "error"
+        stderr = result.get("stderr") or ""
+        if not stderr and status != "passed":
+            stderr = result.get("exception_message") or ""
+
+        return {
+            "status": status,
+            "stdout": result.get("stdout") or "",
+            "stderr": stderr,
+            "exit_code": 0 if status == "passed" else 1,
+            "duration_ms": int(result.get("latency_ms") or 0),
+            "timed_out": bool(status == "timeout"),
+            "thread_id": thread_id,
+        }
+
+    @app.post("/v1/code/hint", dependencies=guard)
+    def code_hint_route(payload: dict = Body(...)) -> dict:
+        raw_level = payload.get("level", 1)
+        try:
+            level = int(raw_level)
+        except (TypeError, ValueError):
+            level = 1
+        observation = str(payload.get("observation") or "")
+        from backend.tools.code_sandbox import hint_for_level
+
+        hint = hint_for_level(level=level, observation=observation)
+        return {"hint": hint}
+
+    @app.get("/v1/code/attempts", dependencies=guard)
+    def code_attempts_route(
+        thread_id: str = "",
+        user_id: str = "student",
+        limit: int = 50,
+    ) -> dict:
+        from backend.platform.code_attempt_store import list_attempts, latest_thread
+
+        tid = thread_id.strip() if thread_id else (latest_thread(user_id, db_path=database) or "")
+        attempts = list_attempts(user_id=user_id, thread_id=tid, limit=limit, db_path=database) if tid else []
+        return {"thread_id": tid, "attempts": attempts}
 
     @app.get("/v1/tools", dependencies=guard)
     def tools() -> dict:

@@ -70,7 +70,7 @@
 
 - 拍照批改的真实试卷验收，以及真实飞书 webhook 验收
 - 代码助教的容器隔离（64MB 内存上限已有）
-- 独立 Web UI 页面实现，以及 Streamlit 剩余直连页面接入新 API
+- 独立 Web UI（React + Vite，ClickHouse 风格，6 页起步，见 PLAN 第 13 节），以及 Streamlit 剩余直连页面接入新 API
 - Postgres / MinIO 与多用户部署
 
 ---

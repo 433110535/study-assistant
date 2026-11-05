@@ -23,6 +23,7 @@
 | 代码执行助教 | ✅ | 工业级硬化沙箱、分级提示（Level 1~3），同一次练习的每次运行写入 `code_attempts`。子进程使用 Windows Job Object（64MB 提交内存上限 + KILL_ON_JOB_CLOSE 原子级级联终止）+ taskkill 进程树强杀兜底 + 管道截断与输出洪水保护；`test_m3_sandbox_hardening` 覆盖死循环超时、内存超限、恶意逃逸与分级提示 | 纯本机沙箱，无 Docker 容器 |
 | 口语 / 联网 / 双 Agent | ⬜ | — | 未开工 |
 | 服务拆分与中台 | 🟡 | 数据中台（数据集自检清洗 + 评测预算硬熔断 circuit breaker）；主要页面已走 API；底层采用 `sqlite3.backup` + WAL checkpoint 刷盘，通过 `/v1/database/backup` 与 `/v1/database/restore` 完成 11 张业务表生产级全量破坏性灾备恢复演练 | Web UI 所需接口已全部提供（F1–F8）；聊天历史、代码助教、识图在 Streamlit 内仍直连，页面尚未接入新接口；纯本机部署已闭环 |
+| Web UI 前端 | ⬜ | 方案见第 13 节：React + Vite、ClickHouse 风格、单机自用、第一版 6 页 | 尚未创建 `web_UI/` |
 
 第 1 节保留改造前的诊断，用来对照缺口；以本节为准看当前进度。
 
@@ -866,6 +867,7 @@ GET  /v1/documents            文档与索引版本
 | M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 API 缺口 F1–F8 已完成，主要页面已走 API，备份恢复演练通过；聊天历史、代码助教、识图在 Streamlit 内仍直连，独立 Web UI 尚未开始；M7 保持 🟡 直到页面接入并通过 E2E |
 
 > 第 3.4–3.6 节（口语陪练 / 联网调研 / 苏格拉底双 Agent）是 P2 可选项，不计入本轮完成条件；确需实现时另立 M8–M10，并在开始前确认优先级与外部 API。
+> Web UI 前端任务见 13.7（U1–U6），同样不计入 M0–M7 的完成条件。
 
 ### 10.7 结束前的自检
 
@@ -947,7 +949,7 @@ GET  /v1/documents            文档与索引版本
 1. F1 + F2 + F3 + F4（P0，约 2–3 天）：前端不再直连后端。
 2. F5 + F6（P1，约 1 天）：看板与上传。
 3. F7 + F8（P1/P2，约 1 天）：批改与部署。
-4. 然后才搭 `web_UI` 壳；接口未齐前不要开始页面重写。
+4. 然后才搭 `web_UI` 壳；接口已齐，前端方案与任务见第 13 节。
 
 > 每一项的接口契约、测试命令和验收标准见第 12 节。把第 12 节交给执行 Agent 即可。
 
@@ -1072,7 +1074,7 @@ venv\Scripts\python.exe -m compileall -q backend frontend tests
 - 新增接口都有测试；`unittest discover` 全绿（180+ 新增）。
 - 现有 Streamlit 行为不变；`local_client` 仍可用。
 - 前端可以只靠 HTTP 完成：登录态 → 会话列表 → 对话 → 图片 OCR → 代码运行/提示 → 看板。
-- 11.3 的 F1–F8 状态更新；M7 仍为 🟡，直到 F1–F4、F8 完成且 E2E 通过。
+- 11.3 的 F1–F8 状态更新；M7 仍为 🟡，直到页面接入且 E2E 通过。
 - README 的“规划中”同步更新。
 
 ### 12.13 汇报与阻塞
@@ -1091,3 +1093,234 @@ venv\Scripts\python.exe -m compileall -q backend frontend tests
 - `APP_PASSWORD` 未配置：默认 local 模式，不要阻塞。
 - `web_UI` 目录不存在：只实现条件挂载，不创建前端代码。
 - 多租户 / RBAC / Postgres：超出本节范围，记录到 PLAN 等待决策。
+
+---
+
+## 13. Web UI 前端方案（ClickHouse · React + Vite）
+
+> 2026-11-05 追加。设计源：`F:\python_ai\UI\design.md`（ClickHouse Design System）。
+> 已确认：ClickHouse 风格；代码放 `F:\python_ai\智能体_local\web_UI`；React + Vite；第一版 6 页；单机自用。
+> 现有 Streamlit 的 Plane 风格暂不混用；新前端完成后替换。`F:\python_ai\UI` 只作设计参考。
+
+### 13.1 设计语言的产品化改造
+
+ClickHouse 是营销站语言：纯黑、霓虹、96px 巨字。学习工作台需要收敛，避免“很酷但难用”。
+
+**颜色 Token**
+
+| Token | 值 | 用法 |
+|---|---|---|
+| `--bg` | `#000000` | 全站页面背景，不用深灰替代 |
+| `--surface` | `#141414` | 按钮、输入框、悬浮层 |
+| `--surface-2` | `#0A0A0A` | 卡片内嵌区域、代码块 |
+| `--border` | `rgba(65,65,65,.8)` | 卡片、表格、分割线 |
+| `--text` | `#FFFFFF` | 标题与正文主色 |
+| `--muted` | `#A0A0A0` | 次级正文、说明 |
+| `--dim` | `#585858` | 元信息、占位符，仅辅助 |
+| `--accent` | `#FAFF69` | 主 CTA、选中态、焦点环、关键数字、链接 hover |
+| `--accent-active` | `#F4F692` | 按下态文字 |
+| `--green` | `#166534` | 次要转化按钮 |
+| `--danger` | `#FF6B6B` | 错误/危险操作，功能性例外 |
+| `--success` | `#4ADE80` | 成功状态，功能性例外 |
+
+**字体**
+
+- 拉丁与数字：Inter，正文 400/500，标题 700/800，Hero 900
+- 中文：回落 PingFang SC / 微软雅黑，中文 700 已是上限
+- 代码：Inconsolata
+- Basier 是商业字体，不引入；功能标题统一 Inter
+
+**应用内字号**（不要全站 96px）
+
+| 角色 | 字号/行高 | 字重 |
+|---|---|---|
+| 登录/空状态 Hero | 56–72 / 1.0 | 800–900 |
+| 页面 H1 | 36–40 / 1.1 | 800 |
+| 区块 H2 | 24–28 / 1.2 | 700 |
+| 卡片标题 | 18–20 / 1.3 | 700 |
+| 正文 | 15–16 / 1.6 | 400 |
+| 辅助 | 13–14 / 1.5 | 400 |
+| 大写标签 | 12 / 16，字距 1.4px | 600 |
+| 指标数字 | 48–64 / 1.0 | 800 |
+| 代码 | 14 / 22 | 600 |
+
+**硬规则**
+
+- 霓虹只做强调，不做大块背景；唯一例外是 CTA 按钮
+- 圆角只用 4 / 8 / 999；超过 8 的卡片改回 8
+- 深度靠 1px 描边和 inset，不用柔和阴影
+- 不用渐变、玻璃拟态、彩色阴影
+- 全站深色；浅色模式放 v2
+
+### 13.2 信息架构（第一版 6 页）
+
+| 路由 | 页面 | 核心内容 |
+|---|---|---|
+| `/` | 概览 | 指标条、掌握度、今日到期、最近活动 |
+| `/chat` | 对话 | 会话列表、消息流、工具轨迹抽屉、图片 OCR |
+| `/practice` | 练习 | 出题 / 整卷判分 / 单题判分 |
+| `/review` | 错题与复习 | 到期卡片、错题表、改期 |
+| `/knowledge` | 知识库 | 文档表、上传、检索、RAG 问答 |
+| `/code` | 代码助教 | 编辑器、运行输出、分级提示、历史 |
+
+Phase 2 再加：`/plan`（计划）、`/ops`（评测/备份）、`/login`（仅 password 模式）。
+
+### 13.3 页面要点
+
+**应用外壳**
+
+- 侧栏 248px：纯黑、右侧 1px 描边；导航项 40px，选中 `#141414` + 左侧 2px 霓虹条
+- 顶栏 56px：大写面包屑、右侧状态胶囊、头像
+- 内容最大宽度 1600px，左右 32px；桌面 12 列，间距 24px
+- 1024px 以下侧栏收起；640px 以下单列，指标卡 2 列
+
+**概览**
+
+- 顶部 4 个指标：连续学习、已掌握概念、今日到期、近 7 日正确率
+- 数字 48–64px、800 字重，关键值用霓虹
+- 两栏：掌握度条形/热力图 + 最近 5 次运行表
+- 右上角霓虹主按钮：开始今日复习
+
+**对话**
+
+- 三栏：会话列表 260px / 消息流自适应 / 工具轨迹 320px（可收起）
+- 用户气泡 `#141414` + 描边；助手透明 + 左侧 2px 霓虹
+- 输入区支持图片：先压缩再上传 OCR，识别文本可编辑
+- SSE 事件映射：thinking / tool_call / tool_result / answer_chunk / final_answer / error
+
+**练习**
+
+- Tab：生成练习 / 整卷判分 / 单题对照
+- 整卷：上传图片 → OCR → 拆题预览 → 逐题状态表（正确/错误/未判分/不支持）
+- 结果表用等宽数字；错误行 hover `#141414`；底部“确认入错题本”
+
+**错题与复习**
+
+- 顶部到期卡片：记住了 / 没记住 / 推到晚上
+- 错题表：学科、考点、错因、下次复习、状态
+- 改期用 Dialog，不跳页
+
+**知识库**
+
+- 文档表：标题、学科、页数、切片数、状态
+- 上传区用虚线描边 dropzone，成功后行内进度
+- 检索结果展示相似度与来源片段
+
+**代码助教**
+
+- 左右分栏：Monaco/CodeMirror 编辑器 + 输出终端
+- 顶部：运行、测试、提示级别 1–3
+- 底部：历史运行列表，可载入某一版
+
+### 13.4 技术栈与工程结构
+
+- React 18 + Vite + TypeScript
+- Tailwind + CSS variables；Radix UI primitives 自建组件
+- TanStack Query（服务端状态）+ Zustand（UI 状态）
+- React Router
+- Monaco 或 CodeMirror 6，懒加载
+- react-markdown + remark-gfm + remark-math + rehype-katex + Shiki
+- Recharts，自定义深色主题
+- Zod、Vitest + RTL + Playwright + axe
+
+```text
+web_UI/
+├── src/
+│   ├── app/            # 路由、AppShell、登录守卫
+│   ├── components/     # Button/Input/Card/Table/Badge/Dialog/Toast/StatCard
+│   ├── features/       # overview/chat/practice/review/knowledge/code
+│   ├── lib/            # api client、SSE、query keys、auth
+│   └── styles/         # tokens.css、globals.css
+├── tests/              # 组件与 E2E
+├── vite.config.ts      # dev 代理 /v1 → 127.0.0.1:8000
+└── package.json
+```
+
+### 13.5 API 对接
+
+- 用 `openapi-typescript` 从 `/openapi.json` 生成类型
+- 所有请求 `credentials: 'include'`；401 统一处理
+- SSE 用 `fetch` + `ReadableStream`（不是 EventSource），支持中断与重连
+- 图片/PDF 走 multipart；图片前端压缩到长边 1600、2MB 内
+- dev 用 Vite proxy `/v1` → `http://127.0.0.1:8000`
+- 生产 `npm run build` 输出 `web_UI/dist`，由 FastAPI 挂 `/app`
+- 实施时把 `Path("web_UI/dist")` 改成基于项目根目录的绝对路径，避免从其他目录启动时静默跳过
+
+### 13.6 组件清单
+
+| 组件 | 要求 |
+|---|---|
+| Button | Neon primary / Dark solid / Ghost / Danger，4px 圆角，无渐变 |
+| Input / Select | `#141414` 底、1px 描边、focus 霓虹环 |
+| Card | 透明或 `#0A0A0A`、1px charcoal 描边、8px 圆角、无软阴影 |
+| StatCard | 数字 48–64px、800 字重、大写标签、关键值霓虹 |
+| DataTable | 大写表头、等宽数字、行 hover `#141414`、横向滚动 |
+| Tabs | 底线式，选中霓虹 |
+| Badge | 胶囊，描边，状态色仅用于状态 |
+| Dialog / Toast | 纯黑面板、charcoal 描边、inset 深度 |
+| Skeleton / EmptyState | 描边骨架；空状态用大写字标 + 一句说明 |
+| ChatBubble | 用户 `#141414`，助手透明 + 左侧霓虹线 |
+| Markdown / CodeBlock | KaTeX + Shiki；Inconsolata；代码块可滚动 |
+| UploadDropzone | 虚线描边、拖拽、类型/大小提示 |
+| TraceDrawer | 工具名、参数、结果、耗时，按事件流追加 |
+| ChartCard | 无渐变、网格 `#414141` 40%、主线霓虹 |
+
+### 13.7 实施阶段（U1–U6）
+
+| ID | 周 | 交付 | 验收 |
+|---|---|---|---|
+| U1 | 1 | 脚手架、设计 token、AppShell、概览 | 5173 可访问；概览读真实数据；token 与组件基础可用 |
+| U2 | 2 | 对话：会话、SSE、工具轨迹、图片 OCR | 含图对话端到端跑通 |
+| U3 | 3 | 练习：出题、整卷/单题判分、结果表 | 判分 → 状态表 → 确认入错题本 |
+| U4 | 4 | 错题与复习 + 知识库 | 到期/改期闭环；上传/检索/RAG 可用 |
+| U5 | 5 | 代码助教 + 响应式 + 可访问性 | 运行/提示/历史；1440/1024/390 无横向滚动 |
+| U6 | 6 | E2E、性能、静态构建、切换 | `npm run build` 成功；`/app` 可访问；关闭 Streamlit 核心链路可用 |
+
+### 13.8 验收标准
+
+- [ ] 6 个页面全部只走 HTTP，前端零 `backend` import
+- [ ] 单机 local 模式直接进入，不强制登录
+- [ ] 对话 SSE 首 token < 2s（本机）；中断/重连/错误有 UI 反馈
+- [ ] 图片上传 → OCR → 可编辑 → 发送，链路完整
+- [ ] 判分 → 错题确认 → 到期复习 → 改期，链路完整
+- [ ] 设计自检：纯黑背景、霓虹只做强调、4/8px 圆角、1px 描边、无渐变
+- [ ] 1440 / 1024 / 390 三个宽度无横向滚动
+- [ ] 键盘可操作，焦点环可见，错误不只靠颜色表达
+- [ ] 主要页面 Lighthouse 性能/可访问性 ≥ 90
+- [ ] 构建产物不含 API Key、密码、`.env`
+
+### 13.9 单机自用约束
+
+- `AUTH_MODE=local`，`user_id=student`，第一版不做登录页
+- FastAPI 与前端都只绑 `127.0.0.1`，不暴露公网
+- 数据只落本地 SQLite 与 `data/uploads/`
+- 不做租户、配额、角色、Postgres/MinIO
+- 以后要切 password 模式，再加 `/login` 与 Cookie 流程；F1 已支持
+
+### 13.10 风险与 Phase 2
+
+**风险**
+
+1. ClickHouse 偏营销，应用内要克制 96px 与霓虹，否则信息密度下降
+2. 全站纯黑长时间学习可能疲劳，浅色模式放 v2
+3. Basier 有授权风险，统一用 Inter
+4. Streamlit 的 Plane 与 Web UI 的 ClickHouse 并存，迁移期不要互相改样式
+5. `web_UI/dist` 的静态挂载路径要改成项目根目录拼接
+
+**Phase 2**
+
+- `/plan` 计划页、`/ops` 评测与备份页
+- 浅色模式
+- 多用户 / RBAC / Postgres / MinIO
+- 容器化代码沙箱与部署
+
+### 13.11 状态
+
+| ID | 任务 | 状态 |
+|---|---|---|
+| U1 | 脚手架 + token + AppShell + 概览 | ⬜ |
+| U2 | 对话 + SSE + OCR + 轨迹 | ⬜ |
+| U3 | 练习 + 判分 | ⬜ |
+| U4 | 错题复习 + 知识库 | ⬜ |
+| U5 | 代码助教 + 响应式 + 可访问性 | ⬜ |
+| U6 | E2E + 构建 + 切换 | ⬜ |

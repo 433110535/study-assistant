@@ -22,7 +22,7 @@
 | 工具选择评测 | ✅ | 默认集 `qa_baseline_v5`（100 条）。`--dry-run` 工具选择 100/100，忠实度 100%。建立黄金校准基准集与 `calibrate_faithfulness_judge` 裁判校准套件（达成 100% 识别正负向幻觉样本），低于 0.85 拦截；v1–v5 快照完整保留；`test_m6_m1_m7_closure` 验证通过 | 离线/在线双模门禁皆可复现 |
 | 代码执行助教 | ✅ | 工业级硬化沙箱、分级提示（Level 1~3），同一次练习的每次运行写入 `code_attempts`。子进程使用 Windows Job Object（64MB 提交内存上限 + KILL_ON_JOB_CLOSE 原子级级联终止）+ taskkill 进程树强杀兜底 + 管道截断与输出洪水保护；`test_m3_sandbox_hardening` 覆盖死循环超时、内存超限、恶意逃逸与分级提示 | 纯本机沙箱，无 Docker 容器 |
 | 口语 / 联网 / 双 Agent | ⬜ | — | 未开工 |
-| 服务拆分与中台 | 🟡 | 数据中台（数据集自检清洗 + 评测预算硬熔断 circuit breaker）；主要页面已走 API；底层采用 `sqlite3.backup` + WAL checkpoint 刷盘，通过 `/v1/database/backup` 与 `/v1/database/restore` 完成 11 张业务表生产级全量破坏性灾备恢复演练 | 聊天历史、代码助教、识图仍直连后端；Web UI 所需接口未提供，见第 11 节；纯本机部署已闭环 |
+| 服务拆分与中台 | 🟡 | 数据中台（数据集自检清洗 + 评测预算硬熔断 circuit breaker）；主要页面已走 API；底层采用 `sqlite3.backup` + WAL checkpoint 刷盘，通过 `/v1/database/backup` 与 `/v1/database/restore` 完成 11 张业务表生产级全量破坏性灾备恢复演练 | Web UI 所需接口已全部提供（F1–F8）；聊天历史、代码助教、识图在 Streamlit 内仍直连，页面尚未接入新接口；纯本机部署已闭环 |
 
 第 1 节保留改造前的诊断，用来对照缺口；以本节为准看当前进度。
 
@@ -863,7 +863,7 @@ GET  /v1/documents            文档与索引版本
 | M4 | 拍照识题 + 整卷拆题/批改 | M2 | 拆题结果可校对；`ungraded` 不计分；真实试卷走通 | ✅ 增强模式支持多选、多空、单位换算等效；整卷批改通过 API 自动诊断、入错题库并更新掌握度；test_m4_paper_e2e 全流程通过 |
 | M5 | 主动复习推送 | M2 | dry-run 可用；真实推送；可改期；有常驻调度 | ✅ 8:00 常驻调度；outbox 通道状态落盘与只重发失败通道（解决重复轰炸）；支持飞书可选 HMAC-SHA256 签名与回调校验；test_m5_dual_channel 验证通过 |
 | M6 | 数据中台 A | M1、M2 | 数据集版本、发布门禁、失败归因看板 | ✅ validate_and_clean_dataset 自检清洗；eval_runner 支持 max_cost_yuan 预算硬熔断；失败归因看板完整捕获工具缺失/空检索/不忠实/超时/超成本 |
-| M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 主要页面已走 API，备份恢复演练通过；聊天历史、代码助教、识图仍直连后端，Web UI 所需接口见第 11 节 |
+| M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 API 缺口 F1–F8 已完成，主要页面已走 API，备份恢复演练通过；聊天历史、代码助教、识图在 Streamlit 内仍直连，独立 Web UI 尚未开始；M7 保持 🟡 直到页面接入并通过 E2E |
 
 > 第 3.4–3.6 节（口语陪练 / 联网调研 / 苏格拉底双 Agent）是 P2 可选项，不计入本轮完成条件；确需实现时另立 M8–M10，并在开始前确认优先级与外部 API。
 
@@ -901,19 +901,21 @@ GET  /v1/documents            文档与索引版本
 
 ### 11.2 仍然直连后端的部分
 
-| 页面/能力 | 直连位置 | 问题 | 需要的接口 |
+> F1–F8 已于 2026-11-05 完成，接口状态见 11.3。本节保留下来，作为“页面迁移”的对照。
+
+| 页面/能力 | 直连位置 | 问题 | 接口现状 |
 |---|---|---|---|
-| 聊天历史 | `frontend/app.py` 直接 import `chat_store`（`ensure_session` / `load_messages` / `list_sessions` / `append_message` / `start_session`） | 浏览器访问不到 SQLite | `GET /v1/sessions`、`GET /v1/sessions/{id}/messages`、`POST /v1/sessions` |
-| 代码助教 | 直接 import `code_sandbox`、`code_attempt_store` | 代码执行与历史只在进程内 | `POST /v1/code/run`、`POST /v1/code/hint`、`GET /v1/code/attempts` |
-| 识图修正 | 直接 import `vision.read_image` | 图片上传/OCR 没有 HTTP 入口 | `POST /v1/vision/ocr`（multipart） |
-| 习题 AI 批改 | `render_quiz` 内直接 `get_llm()` 组 prompt | 浏览器无法调用模型 | `POST /v1/quiz/grade`（或统一走 `items/grade`） |
-| 登录 | Streamlit `render_login` + API `X-API-Key` | 没有会话/用户体系 | `POST /v1/auth/login`、`POST /v1/auth/logout`、`GET /v1/auth/me` |
-| 数据看板 | 页面内用 `st.session_state` 统计 | 刷新丢失、无法多端 | `GET /v1/dashboard/summary` |
+| 聊天历史 | `frontend/app.py` 直接 import `chat_store`（`ensure_session` / `load_messages` / `list_sessions` / `append_message` / `start_session`） | 浏览器访问不到 SQLite | 已提供 `/v1/sessions*`；Streamlit 尚未接入 |
+| 代码助教 | 直接 import `code_sandbox`、`code_attempt_store` | 代码执行与历史只在进程内 | 已提供 `/v1/code/*`；Streamlit 尚未接入 |
+| 识图修正 | 直接 import `vision.read_image` | 图片上传/OCR 没有 HTTP 入口 | 已提供 `/v1/vision/ocr`；Streamlit 尚未接入 |
+| 习题 AI 批改 | `render_quiz` 内直接 `get_llm()` 组 prompt | 浏览器无法调用模型 | 已提供 `/v1/quiz/grade`；Streamlit 尚未接入 |
+| 登录 | Streamlit `render_login` + API `X-API-Key` | 没有会话/用户体系 | 已提供 `/v1/auth/*`；Streamlit 仍用页面内登录 |
+| 数据看板 | 页面内用 `st.session_state` 统计 | 刷新丢失、无法多端 | 已提供 `/v1/dashboard/summary`；Streamlit 仍用 session_state |
 
 补充：
 
 - `format_paper` 是本地格式化函数，前端可自行渲染，不算阻塞。
-- 知识库页的列表、检索、RAG 问答已经走 API；上传若仍是 JSON 文本，需要改成 multipart。
+- 知识库页的列表、检索、RAG 问答已经走 API；上传接口已补 multipart。
 
 ### 11.3 Web UI 必需接口（按优先级）
 
@@ -929,6 +931,8 @@ GET  /v1/documents            文档与索引版本
 | F8 | CORS + 静态托管 | 前后端分离 | P0 | dev 代理 `/v1`；生产同源 | ✅ 已完成（CORS_ORIGINS 白名单允许凭证、条件挂载 web_UI/dist 至 /app） |
 
 ### 11.4 前端独立化验收
+
+> API 侧 F1–F8 已完成；以下条目在页面接入后逐项勾选。
 
 - [ ] 新前端代码中没有任何 `from backend...` / `import backend...`
 - [ ] 核心链路只经 HTTP：登录 → 对话（含图）→ 判分 → 错题确认 → 复习改期
@@ -951,7 +955,7 @@ GET  /v1/documents            文档与索引版本
 
 - 第 0 节“服务拆分与中台”：✅ → 🟡。
 - 10.6 的 M7：✅ → 🟡。
-- M7 回到 ✅ 的条件：F1–F4、F8 完成，核心链路 E2E 通过。
+- M7 回到 ✅ 的条件：F1–F8 已完成；还差页面接入与核心链路 E2E。
 
 ---
 

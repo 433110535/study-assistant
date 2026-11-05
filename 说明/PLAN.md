@@ -1324,3 +1324,169 @@ web_UI/
 | U4 | 错题复习 + 知识库 | ⬜ |
 | U5 | 代码助教 + 响应式 + 可访问性 | ⬜ |
 | U6 | E2E + 构建 + 切换 | ⬜ |
+
+> 交给 Antigravity 的执行提示词见第 14 节。
+
+---
+
+## 14. Antigravity 执行提示词（Web UI）
+
+> 2026-11-05 追加。配合第 13 节使用。
+> 14.1 是完整版，直接整段交给 Antigravity；14.2 是简洁版，任务窗口有限时按阶段使用。
+
+### 14.1 完整版
+
+```text
+# 任务：为学习助手实现独立 Web UI（React + Vite + ClickHouse 风格）
+
+## 角色
+你是资深前端工程师 + 设计系统实现者。用 Antigravity 的 Manager 做计划、Editor 写代码、Browser 做验收。
+
+## 工作目录
+- 仓库：F:\python_ai\智能体_local
+- 新前端：F:\python_ai\智能体_local\web_UI（不存在就创建）
+- 后端：backend/api，运行在 http://127.0.0.1:8000
+- 旧前端：Streamlit，8501；不要修改，也不要复用它的样式
+
+## 开工前必读
+1. 说明/PLAN.md 第 13 节（本任务规格）、第 0 节（进度）、第 11 节（API 缺口）
+2. F:\python_ai\UI\design.md（ClickHouse 设计系统，唯一设计源）
+3. backend/api/app.py（F1–F8 接口）
+4. backend/tools/grading.py、code_sandbox.py、backend/knowledge/knowledge_base_faiss.py
+5. frontend/app.py（只参考交互，不参考视觉）
+
+注意：F:\UI\design.md 是旧的 Plane 风格，不要用；F:\python_ai\UI 才是 ClickHouse。
+
+## 已确认的决策
+- 风格：ClickHouse；纯黑背景、霓虹黄绿、Inter + Inconsolata、4/8px 圆角、1px 炭灰描边
+- 技术栈：React 18 + Vite + TypeScript + Tailwind + Radix UI + TanStack Query + Zustand + React Router
+- 第一版 6 页：概览、对话、练习、错题与复习、知识库、代码助教
+- 单机自用：AUTH_MODE=local，不做登录页，只绑 127.0.0.1
+- 所有数据走 HTTP，前端零 backend import
+
+## 设计 Token（写进 src/styles/tokens.css）
+--bg: #000000
+--surface: #141414
+--surface-2: #0A0A0A
+--border: rgba(65,65,65,.8)
+--text: #FFFFFF
+--muted: #A0A0A0
+--dim: #585858
+--accent: #FAFF69
+--accent-active: #F4F692
+--green: #166534
+--danger: #FF6B6B
+--success: #4ADE80
+
+字体：
+- Inter：正文 400/500，标题 700/800，Hero 900
+- 中文回落 PingFang SC / 微软雅黑，中文 700 是上限
+- Inconsolata：代码
+- 不引入 Basier（商业字体）
+
+字号：
+- 登录/空状态 Hero 56–72 / 1.0 / 800–900
+- 页面 H1 36–40 / 1.1 / 800
+- 区块 H2 24–28 / 1.2 / 700
+- 卡片标题 18–20 / 1.3 / 700
+- 正文 15–16 / 1.6 / 400
+- 辅助 13–14 / 1.5 / 400
+- 大写标签 12 / 16 / 600，字距 1.4px
+- 指标数字 48–64 / 1.0 / 800
+
+硬规则：
+- 霓虹只做 CTA、选中态、焦点环、关键数字、链接 hover，不做大块背景
+- 圆角只用 4 / 8 / 999
+- 深度靠 1px 描边和 inset，不用柔和阴影
+- 不用渐变、玻璃拟态、彩色阴影
+- 全站纯黑，浅色模式不做
+
+## 信息架构（第一版 6 页）
+- `/` 概览：4 个指标（连续学习、已掌握概念、今日到期、近 7 日正确率）、掌握度图、最近 5 次运行
+- `/chat` 对话：会话列表 260px、消息流、工具轨迹抽屉 320px、图片上传/OCR
+- `/practice` 练习：Tab（生成练习 / 整卷判分 / 单题对照）、逐题状态表、确认入错题本
+- `/review` 错题与复习：到期卡片（记住了/没记住/推到晚上）、错题表、改期 Dialog
+- `/knowledge` 知识库：文档表、上传 dropzone、检索、RAG 问答
+- `/code` 代码助教：编辑器 + 输出终端、运行/测试、提示级别 1–3、历史
+
+应用外壳：
+- 侧栏 248px，纯黑，右侧 1px 描边；导航项 40px，选中 #141414 + 左侧 2px 霓虹条
+- 顶栏 56px，大写面包屑、右侧状态、头像
+- 内容最大宽度 1600px，左右 32px；桌面 12 列
+- 1024px 以下侧栏收起；640px 以下单列、指标卡 2 列
+
+## API 映射
+- 概览：GET /v1/dashboard/summary、GET /v1/eval/latest
+- 对话：GET/POST /v1/sessions*、POST /v1/chat/stream（SSE）、POST /v1/vision/ocr
+- 练习：POST /v1/questions、POST /v1/papers/grade、POST /v1/items/grade、POST /v1/quiz/grade
+- 错题：GET/POST /v1/mistakes*、GET /v1/review/due、POST /v1/mistakes/{id}/review、POST /v1/mistakes/{id}/reschedule、GET /v1/mastery
+- 知识库：GET/POST /v1/documents、POST /v1/documents/upload、POST /v1/documents/search、POST /v1/documents/ask
+- 代码：POST /v1/code/run、POST /v1/code/hint、GET /v1/code/attempts
+
+## 工程要求
+1. 用 Vite 创建 `web_UI`，TypeScript + React。
+2. Tailwind + CSS variables；Radix UI primitives 自建组件，不用 shadcn 默认浅色主题。
+3. Vite dev proxy：`/v1` → `http://127.0.0.1:8000`；前端 dev 端口 5173。
+4. 用 `openapi-typescript` 从 `/openapi.json` 生成类型；所有请求 `credentials: 'include'`。
+5. SSE 用 `fetch` + `ReadableStream`（不是 EventSource），支持中断与重连；事件：thinking / tool_call / tool_result / answer_chunk / final_answer / error。
+6. 图片上传前压缩到长边 1600、2MB 内；PDF 走 multipart，≤20MB。
+7. 每个页面都要有 loading、空状态、错误态；401 统一处理。
+8. Monaco 或 CodeMirror 懒加载；KaTeX/Shiki 懒加载；长列表虚拟化。
+9. `npm run build` 输出 `web_UI/dist`；不改后端，除非发现接口缺失，先在汇报里说明。
+10. 不提交 `.env`、密钥、node_modules；更新 `web_UI/README.md` 的启动说明。
+
+## 实施顺序（每个阶段都要浏览器验收）
+U1 脚手架 + tokens + AppShell + 概览
+  - 5173 可访问；概览读真实数据；设计 token 生效
+U2 对话：会话列表、SSE、工具轨迹、图片 OCR
+  - 一条含图对话端到端跑通
+U3 练习：出题、整卷/单题判分、结果表
+  - 判分 → 状态表 → 确认入错题本
+U4 错题与复习 + 知识库
+  - 到期/改期闭环；上传/检索/RAG 可用
+U5 代码助教 + 响应式 + 可访问性
+  - 运行/提示/历史；1440/1024/390 无横向滚动
+U6 E2E + 性能 + 静态构建 + 切换
+  - `npm run build` 成功；`/app` 可访问；关闭 Streamlit 核心链路可用
+
+每完成一个阶段：
+- 跑 `npm run build`
+- 在 Browser 里按 1440、1024、390 三个宽度截图
+- 更新 `说明/PLAN.md` 13.11 的 U 状态
+- 汇报：改动文件、截图、构建结果、问题、下一阶段
+
+## 验收
+- [ ] 6 页全部只走 HTTP，零 backend import
+- [ ] 单机 local 模式直接进入，不强制登录
+- [ ] SSE 首 token < 2s（本机），中断/重连/错误有 UI 反馈
+- [ ] 图片上传 → OCR → 可编辑 → 发送完整
+- [ ] 判分 → 错题确认 → 到期复习 → 改期完整
+- [ ] 纯黑背景、霓虹只做强调、4/8px 圆角、1px 描边、无渐变
+- [ ] 1440/1024/390 无横向滚动
+- [ ] 键盘可操作，焦点环可见，错误不只靠颜色
+- [ ] 构建产物不含 API Key、密码、.env
+
+## 启动命令
+后端：
+  venv\Scripts\python.exe -m backend.api
+前端：
+  cd web_UI
+  npm install
+  npm run dev
+构建：
+  npm run build
+
+## 开始方式
+先只做 U1；U1 通过后继续 U2–U6。只有遇到接口缺失、设计冲突或无法自测时才停下来问我。
+```
+
+### 14.2 简洁版
+
+```text
+在 F:\python_ai\智能体_local 新建 web_UI，React 18 + Vite + TS + Tailwind + Radix + TanStack Query。
+按 说明/PLAN.md 第 13 节和 F:\python_ai\UI\design.md 实现 ClickHouse 风格：纯黑 #000、霓虹 #FAFF69、Inter/Inconsolata、4/8px 圆角、1px 描边。
+先做 U1：脚手架、tokens、AppShell、概览（GET /v1/dashboard/summary）。
+Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模式不做登录；前端零 backend import。
+完成后 npm run build，浏览器按 1440/1024/390 截图，更新 PLAN 13.11，再继续 U2–U6。
+不要改 Streamlit 和后端。
+```

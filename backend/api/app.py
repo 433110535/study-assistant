@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import hmac
 import json
 import os
@@ -439,6 +441,22 @@ def create_app(
         attempts = list_attempts(user_id=effective_user, thread_id=tid, limit=clamped_limit, db_path=database) if tid else []
         return {"thread_id": tid, "attempts": attempts}
 
+    @app.get("/v1/dashboard/summary")
+    def dashboard_summary_route(
+        user_id: Optional[str] = None,
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
+        from backend.platform.dashboard_store import get_dashboard_summary
+
+        if current_user.get("auth_type") == "session":
+            effective_user = current_user.get("user_id", "student")
+            if user_id and user_id != effective_user:
+                raise HTTPException(status_code=403, detail="无权访问其他用户的看板数据")
+        else:
+            effective_user = user_id or current_user.get("user_id") or "student"
+
+        return get_dashboard_summary(user_id=effective_user, db_path=database)
+
     @app.get("/v1/tools", dependencies=guard)
     def tools() -> dict:
         import backend.agents.react_tools  # noqa: F401
@@ -854,6 +872,120 @@ def create_app(
             db_path=database,
         )
         return {"doc_id": doc_id, "title": title, "chunks": chunks, "trace_id": trace_id}
+
+    @app.post("/v1/documents/upload")
+    async def upload_document_route(
+        file: UploadFile = File(...),
+        subject: str = Form(default="未分类"),
+        title: Optional[str] = Form(default=None),
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
+        from datetime import timezone
+        filename = file.filename or ""
+        suffix = Path(filename).suffix.lower() if filename else ""
+        if suffix != ".pdf":
+            raise HTTPException(status_code=400, detail="仅支持合法的 PDF 文档 (.pdf)")
+
+        effective_user = current_user.get("user_id", "student") if current_user.get("auth_type") == "session" else "student"
+        doc_title = (title or "").strip() or Path(filename).stem or "未命名文档"
+        subject_clean = (subject or "未分类").strip() or "未分类"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp_path = tmp.name
+
+        hasher = hashlib.sha256()
+        total_bytes = 0
+        first_chunk = True
+
+        try:
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                if first_chunk:
+                    if not chunk.startswith(b"%PDF-"):
+                        raise HTTPException(status_code=400, detail="文件内容不是合法的 PDF 格式")
+                    first_chunk = False
+                total_bytes += len(chunk)
+                if total_bytes > 20 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="文档大小超过 20MB 限制")
+                hasher.update(chunk)
+                with open(tmp_path, "ab") as f:
+                    f.write(chunk)
+
+            if total_bytes == 0:
+                raise HTTPException(status_code=400, detail="上传文档为空")
+
+            file_sha256 = hasher.hexdigest()
+            doc_id = f"doc_{file_sha256[:12]}"
+
+            # 纯扫描件/空文本拦截防御 (422)
+            from backend.knowledge.pdf_loader import extract_text_from_pdf, clean_text
+            try:
+                pdf_data = extract_text_from_pdf(tmp_path)
+                extracted_text = clean_text(pdf_data.get("text", ""))
+                if not extracted_text or len(extracted_text.strip()) < 10:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="无法从 PDF 中提取有效文本（可能文件已损坏、加密或为纯图片扫描件）",
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=422, detail=f"PDF 解析失败: {e}")
+
+            # 线程池异步卸载向量计算
+            kb = get_kb()
+            chunks = 0
+            if kb is not None:
+                ok = await asyncio.to_thread(
+                    kb.add_pdf,
+                    tmp_path,
+                    doc_id=doc_id,
+                    title=doc_title,
+                    subject=subject_clean,
+                )
+                if not ok:
+                    raise HTTPException(status_code=500, detail="PDF 向量入库失败")
+                doc_rec = getattr(kb, "doc_info", {}).get(doc_id, {})
+                chunks = doc_rec.get("chunk_count", 0)
+            else:
+                chunks = 1
+
+            # 双写同步到 SQLite documents 表
+            add_document_record(
+                doc_id=doc_id,
+                title=doc_title,
+                path=tmp_path,
+                subject=subject_clean,
+                chunks=chunks,
+                user_id=effective_user,
+                db_path=database,
+            )
+            log_write_audit(
+                "kb_upload_document",
+                {"doc_id": doc_id, "title": doc_title, "subject": subject_clean, "chunks": chunks, "sha256": file_sha256},
+                user_id=effective_user,
+                db_path=database,
+            )
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            return {
+                "doc_id": doc_id,
+                "title": doc_title,
+                "size_bytes": total_bytes,
+                "sha256": file_sha256,
+                "chunks": chunks,
+                "subject": subject_clean,
+                "status": "indexed",
+                "created_at": now_iso,
+            }
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     @app.delete("/v1/documents/{doc_id}", dependencies=guard)
     def remove_document(doc_id: str, user_id: str = "student") -> dict:

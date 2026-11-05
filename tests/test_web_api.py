@@ -27,7 +27,12 @@ class TestF1Auth(unittest.TestCase):
         self.db = Path(self.tmp.name) / "app.db"
 
     def tearDown(self):
-        self.tmp.cleanup()
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
 
     def test_local_mode_default(self):
         app = create_app(self.db, auth_mode="local")
@@ -161,7 +166,12 @@ class TestF2Sessions(unittest.TestCase):
         self.client = TestClient(create_app(self.db, auth_mode="local"))
 
     def tearDown(self):
-        self.tmp.cleanup()
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
 
     def test_empty_sessions_and_create(self):
         empty = self.client.get("/v1/sessions", params={"user_id": "student"})
@@ -250,7 +260,12 @@ class TestF3VisionOcr(unittest.TestCase):
         self.db = Path(self.tmp.name) / "app.db"
 
     def tearDown(self):
-        self.tmp.cleanup()
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
 
     def test_successful_ocr(self):
         def fake_ocr(path: str, focus: str = "全部") -> str:
@@ -362,7 +377,12 @@ class TestF4CodeTutor(unittest.TestCase):
         self.client = TestClient(create_app(self.db, auth_mode="local"))
 
     def tearDown(self):
-        self.tmp.cleanup()
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
 
     def test_run_code_passed(self):
         res = self.client.post(
@@ -491,6 +511,248 @@ class TestCorsAndOptions(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.headers.get("access-control-allow-origin"), "http://localhost:5173")
         self.assertEqual(res.headers.get("access-control-allow-credentials"), "true")
+
+
+
+class TestF5Dashboard(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "app.db"
+        self.app = create_app(self.db, auth_mode="local")
+        self.client = TestClient(self.app)
+
+    def tearDown(self):
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
+
+    def test_empty_dashboard_summary(self):
+        res = self.client.get("/v1/dashboard/summary")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["user_id"], "student")
+        self.assertEqual(data["overview"]["session_count"], 0)
+        self.assertEqual(data["overview"]["message_count"], 0)
+        self.assertEqual(data["overview"]["document_count"], 0)
+        self.assertEqual(data["mistakes"]["total"], 0)
+        self.assertEqual(data["mistakes"]["due_today"], 0)
+        self.assertEqual(data["mastery"]["total_concepts"], 0)
+        self.assertEqual(data["mastery"]["average_score"], 0.0)
+        self.assertEqual(data["mastery"]["distribution"], {"low": 0, "medium": 0, "high": 0})
+        self.assertEqual(data["recent_runs"], [])
+        self.assertIsNone(data["latest_evaluation"])
+
+    def test_dashboard_summary_with_data(self):
+        import sqlite3
+        from datetime import datetime, timezone, timedelta
+        from backend.platform.chat_store import start_session, append_message
+        from backend.platform.domain_store import add_document_record, upsert_mastery
+        from backend.platform.mistake_store import create_pending, confirm_mistake
+
+        from backend.platform.trace_store import init_trace_db
+        from backend.platform.eval_runner import ensure_eval_tables
+        init_trace_db(self.db)
+        ensure_eval_tables(self.db)
+
+        # 1. Sessions & Messages
+        s1 = start_session("student", "会话1", db_path=self.db)
+        append_message(s1, "user", "你好", db_path=self.db)
+        append_message(s1, "assistant", "你好！", db_path=self.db)
+
+        # 2. Documents
+        add_document_record("doc1", "算法导论", path="/tmp/algo.pdf", chunks=10, user_id="student", db_path=self.db)
+
+        # 3. Mistakes
+        m1 = create_pending("student", "数学", "导数", "计算错", "求导", db_path=self.db)
+        confirm_mistake(m1, db_path=self.db)  # becomes confirmed, next_review_at in future
+        m2 = create_pending("student", "数学", "极限", "概念错", "求极限", db_path=self.db)  # pending
+
+        # 模拟一条今日到期的错题
+        with sqlite3.connect(str(self.db)) as c_m:
+            past_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            c_m.execute("UPDATE mistakes SET next_review_at = ? WHERE id = ?", (past_time, m1))
+            c_m.commit()
+
+        # 4. Mastery, Runs, Eval runs
+        with sqlite3.connect(str(self.db)) as c:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            c.execute("INSERT INTO mastery (user_id, concept, score, attempts, last_seen) VALUES ('student', '二分查找', 0.9, 5, ?)", (now_iso,))
+            c.execute("INSERT INTO mastery (user_id, concept, score, attempts, last_seen) VALUES ('student', '动态规划', 0.5, 3, ?)", (now_iso,))
+            c.execute("INSERT INTO mastery (user_id, concept, score, attempts, last_seen) VALUES ('student', '图论', 0.2, 1, ?)", (now_iso,))
+
+            # 5. Runs (关联 session s1)
+            c.execute(
+                """
+                INSERT INTO runs (id, session_id, user_input, final_answer, iterations, tools_used, latency_ms, status, created_at, model, cost_yuan)
+                VALUES ('run_1', ?, '请帮我写个快速排序', '好的，这是快排', 1, '[]', 250, 'success', ?, 'qwen2.5', 0.002)
+                """,
+                (s1, now_iso),
+            )
+
+            # 6. Eval runs
+            c.execute(
+                """
+                INSERT INTO eval_runs (id, dataset_name, dataset_version, mode, status, sample_count, passed, summary_json, started_at, finished_at)
+                VALUES ('eval_1', 'qa_baseline', 'v5', 'dry-run', 'passed', 10, 9, '{"faithfulness": 0.95}', '2026-11-05T01:00:00Z', '2026-11-05T01:05:00Z')
+                """
+            )
+            c.commit()
+
+        res = self.client.get("/v1/dashboard/summary")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+
+        self.assertEqual(data["overview"]["session_count"], 1)
+        self.assertEqual(data["overview"]["message_count"], 2)
+        self.assertEqual(data["overview"]["document_count"], 1)
+
+        self.assertEqual(data["mistakes"]["total"], 2)
+        self.assertEqual(data["mistakes"]["pending"], 1)
+        self.assertEqual(data["mistakes"]["confirmed"], 1)
+        self.assertEqual(data["mistakes"]["due_today"], 1)
+
+        self.assertEqual(data["mastery"]["total_concepts"], 3)
+        self.assertAlmostEqual(data["mastery"]["average_score"], 0.53, places=2)
+        self.assertEqual(data["mastery"]["distribution"]["low"], 1)
+        self.assertEqual(data["mastery"]["distribution"]["medium"], 1)
+        self.assertEqual(data["mastery"]["distribution"]["high"], 1)
+
+        self.assertEqual(len(data["recent_runs"]), 1)
+        self.assertEqual(data["recent_runs"][0]["prompt_preview"], "请帮我写个快速排序")
+        self.assertEqual(data["recent_runs"][0]["model"], "qwen2.5")
+
+        self.assertIsNotNone(data["latest_evaluation"])
+        self.assertEqual(data["latest_evaluation"]["dataset_name"], "qa_baseline")
+        self.assertEqual(data["latest_evaluation"]["pass_rate"], 0.9)
+        self.assertEqual(data["latest_evaluation"]["summary"], {"faithfulness": 0.95})
+
+    def test_dashboard_user_isolation(self):
+        app = create_app(self.db, auth_mode="password")
+        client_a = TestClient(app)
+        create_web_session("student_a", "tok_a", db_path=self.db)
+        client_a.cookies.set("study_session", "tok_a")
+
+        # student_b 有数据
+        from backend.platform.chat_store import start_session
+        s_b = start_session("student_b", "B的私密会话", db_path=self.db)
+
+        # student_a 越权请求 student_b 的看板 -> 403 Forbidden
+        res_forbidden = client_a.get("/v1/dashboard/summary", params={"user_id": "student_b"})
+        self.assertEqual(res_forbidden.status_code, 403)
+        self.assertIn("无权访问", res_forbidden.json()["detail"])
+
+        # student_a 查看自己的看板 -> 干净隔离 (0)
+        res_own = client_a.get("/v1/dashboard/summary")
+        self.assertEqual(res_own.status_code, 200)
+        self.assertEqual(res_own.json()["overview"]["session_count"], 0)
+
+
+class TestF6DocumentsUpload(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "app.db"
+        self.app = create_app(self.db, auth_mode="local")
+        self.client = TestClient(self.app)
+
+    def tearDown(self):
+        import gc
+        gc.collect()
+        try:
+            self.tmp.cleanup()
+        except Exception:
+            pass
+
+    def test_upload_non_pdf_rejected(self):
+        fake_file = io.BytesIO(b"print('hello')")
+        res = self.client.post(
+            "/v1/documents/upload",
+            files={"file": ("exploit.py", fake_file, "text/x-python")},
+            data={"subject": "编程"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("仅支持合法的 PDF", res.json()["detail"])
+
+    def test_upload_fake_pdf_magic_bytes_rejected(self):
+        fake_file = io.BytesIO(b"NOT_A_REAL_PDF_HEADER_CONTENT")
+        res = self.client.post(
+            "/v1/documents/upload",
+            files={"file": ("fake.pdf", fake_file, "application/pdf")},
+            data={"subject": "计算机"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("不是合法的 PDF 格式", res.json()["detail"])
+
+    def test_upload_empty_pdf_rejected(self):
+        empty_file = io.BytesIO(b"")
+        res = self.client.post(
+            "/v1/documents/upload",
+            files={"file": ("empty.pdf", empty_file, "application/pdf")},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("上传文档为空", res.json()["detail"])
+
+    def test_upload_oversized_pdf_rejected(self):
+        # 超过 20MB: 创建以 %PDF- 开头的大流（用 mock 或流式生成）
+        big_content = b"%PDF-" + b"0" * (20 * 1024 * 1024 + 10)
+        big_file = io.BytesIO(big_content)
+        res = self.client.post(
+            "/v1/documents/upload",
+            files={"file": ("oversized.pdf", big_file, "application/pdf")},
+        )
+        self.assertEqual(res.status_code, 413)
+        self.assertIn("超过 20MB", res.json()["detail"])
+
+    def test_upload_scanned_or_empty_text_rejected(self):
+        # 伪造有效魔数但无可提取文本的 PDF
+        dummy_pdf = io.BytesIO(b"%PDF-1.4 header without text")
+        with patch("backend.knowledge.pdf_loader.extract_text_from_pdf", return_value={"text": "", "pages": 1, "metadata": {}}):
+            res = self.client.post(
+                "/v1/documents/upload",
+                files={"file": ("blank.pdf", dummy_pdf, "application/pdf")},
+            )
+            self.assertEqual(res.status_code, 422)
+            self.assertIn("无法从 PDF 中提取有效文本", res.json()["detail"])
+
+    def test_upload_success_and_reflected_in_f5_dashboard(self):
+        fixture_path = Path("tests/fixtures/sample.pdf")
+        if not fixture_path.exists():
+            self.skipTest("sample.pdf fixture not found")
+
+        with open(fixture_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        # Mock FAISS kb.add_pdf
+        class MockKB:
+            def __init__(self):
+                self.doc_info = {}
+            def add_pdf(self, path, doc_id=None, title=None, subject=None, chunk_size=500, chunk_overlap=50):
+                self.doc_info[doc_id] = {"chunk_count": 5}
+                return True
+
+        mock_kb = MockKB()
+        app = create_app(self.db, auth_mode="local", kb_factory=lambda: mock_kb)
+        client = TestClient(app)
+
+        res = client.post(
+            "/v1/documents/upload",
+            files={"file": ("sample.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+            data={"subject": "英语", "title": "英语学习指南"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["title"], "英语学习指南")
+        self.assertEqual(data["subject"], "英语")
+        self.assertEqual(data["chunks"], 5)
+        self.assertEqual(data["status"], "indexed")
+        self.assertTrue(data["doc_id"].startswith("doc_"))
+
+        # 联动验证 F5 看板：document_count 必须实时 +1
+        dash_res = client.get("/v1/dashboard/summary")
+        self.assertEqual(dash_res.status_code, 200)
+        self.assertEqual(dash_res.json()["overview"]["document_count"], 1)
 
 
 if __name__ == "__main__":

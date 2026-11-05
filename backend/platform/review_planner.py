@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -171,15 +172,29 @@ def run_review_push(
                 count=len(state["due"]),
             )
 
-        status, channel, error = _deliver(body, sender, mailer)
+        succeeded_channels = set()
+        if existing is not None:
+            raw_cs = ""
+            if "channel_status" in existing.keys():
+                raw_cs = existing["channel_status"] or ""
+            if raw_cs:
+                try:
+                    cs_dict = json.loads(raw_cs)
+                    for ch, st in cs_dict.items():
+                        if st == "sent":
+                            succeeded_channels.add(ch)
+                except Exception:
+                    pass
+
+        status, channel, error, channel_status_json = _deliver(body, sender, mailer, succeeded_channels=succeeded_channels)
 
         created_at = _iso(as_of)
         if existing is None:
             conn.execute(
                 """
                 INSERT INTO review_outbox (
-                    id, user_id, dedupe_key, body, status, channel, error, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, user_id, dedupe_key, body, status, channel, error, created_at, channel_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -190,16 +205,17 @@ def run_review_push(
                     channel,
                     error,
                     created_at,
+                    channel_status_json,
                 ),
             )
         else:
             conn.execute(
                 """
                 UPDATE review_outbox
-                SET body = ?, status = ?, channel = ?, error = ?
+                SET body = ?, status = ?, channel = ?, error = ?, channel_status = ?
                 WHERE dedupe_key = ?
                 """,
-                (body, status, channel, error, dedupe_key),
+                (body, status, channel, error, channel_status_json, dedupe_key),
             )
         conn.commit()
 
@@ -219,25 +235,33 @@ def _deliver(
     body: str,
     sender: Optional[Sender],
     mailer: Optional[Sender],
+    succeeded_channels: Optional[set] = None,
 ) -> tuple:
-    """没有外发函数时只记本地。任一通道失败则整次记为 failed，便于再跑一次。"""
+    """没有外发函数时只记本地。任一通道失败则整次记为 failed，便于再跑一次。支持通道隔离与重试幂等过滤。"""
+    succeeded = succeeded_channels or set()
     jobs = []
     if sender is not None:
         jobs.append(("feishu", sender))
     if mailer is not None:
         jobs.append(("smtp", mailer))
     if not jobs:
-        return "stored", "local", ""
+        return "stored", "local", "", "{}"
+    channel_status = {}
     errors = []
     for name, send in jobs:
+        if name in succeeded:
+            channel_status[name] = "sent"
+            continue
         try:
             send(body)
+            channel_status[name] = "sent"
         except Exception as exc:
             errors.append(f"{name}: {exc}")
+            channel_status[name] = f"failed: {exc}"
     channel = ",".join(name for name, _send in jobs)
     if errors:
-        return "failed", channel, "；".join(errors)
-    return "sent", channel, ""
+        return "failed", channel, "；".join(errors), json.dumps(channel_status, ensure_ascii=False)
+    return "sent", channel, "", json.dumps(channel_status, ensure_ascii=False)
 
 
 def _prepare(db_path: Optional[Path]) -> Path:
@@ -254,10 +278,15 @@ def _prepare(db_path: Optional[Path]) -> Path:
                 status TEXT NOT NULL,
                 channel TEXT NOT NULL,
                 error TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                channel_status TEXT DEFAULT '{}'
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE review_outbox ADD COLUMN channel_status TEXT DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
     return path
 

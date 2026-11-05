@@ -20,6 +20,18 @@ from typing import Optional
 from backend.tools.review_reply import apply_review_reply
 
 
+import hashlib
+import hmac
+
+
+def verify_feishu_signature(timestamp: str, nonce: str, body: bytes, secret: str, signature: str) -> bool:
+    if not secret or not signature:
+        return False
+    bytes_to_sign = f"{timestamp}{nonce}{secret}".encode("utf-8") + body
+    calculated = hashlib.sha256(bytes_to_sign).hexdigest()
+    return hmac.compare_digest(calculated, signature)
+
+
 def process_reply_http(
     body: bytes,
     user_id: str,
@@ -28,9 +40,17 @@ def process_reply_http(
     db_path: Optional[Path] = None,
     token: str = "",
     header_token: str = "",
+    feishu_secret: str = "",
+    lark_timestamp: str = "",
+    lark_nonce: str = "",
+    lark_signature: str = "",
 ) -> tuple:
+    # 鉴权优先级：配置了 token 则检验 token；配置了 feishu_secret 则校验飞书签名
     if token and header_token != token:
         return 401, {"applied": 0, "reason": "unauthorized", "text": ""}
+    if feishu_secret:
+        if not verify_feishu_signature(lark_timestamp, lark_nonce, body, feishu_secret, lark_signature):
+            return 401, {"applied": 0, "reason": "unauthorized", "text": ""}
     text = body.decode("utf-8", errors="replace")
     result = apply_review_reply(user_id, text, now=now, db_path=db_path)
     code = 200 if result["reason"] != "unrecognized" else 422

@@ -439,25 +439,111 @@ def run_student_code(
             str(tests_path),
             str(result_path),
         ]
+        proc = None
+        job_handle = None
+        stdout_text = ""
+        stderr_text = ""
         try:
-            completed = subprocess.run(
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                    job_extended = 9
+                    process_memory = 0x00000100
+                    job_memory = 0x00000200
+                    kill_on_close = 0x00002000
+
+                    class _BasicLimit(ctypes.Structure):
+                        _fields_ = [
+                            ("PerProcessUserTimeLimit", ctypes.c_int64),
+                            ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", wintypes.DWORD),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t),
+                            ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t),
+                            ("PriorityClass", wintypes.DWORD),
+                            ("SchedulingClass", wintypes.DWORD),
+                        ]
+
+                    class _IoCounters(ctypes.Structure):
+                        _fields_ = [
+                            ("ReadOperationCount", ctypes.c_uint64),
+                            ("WriteOperationCount", ctypes.c_uint64),
+                            ("OtherOperationCount", ctypes.c_uint64),
+                            ("ReadTransferCount", ctypes.c_uint64),
+                            ("WriteTransferCount", ctypes.c_uint64),
+                            ("OtherTransferCount", ctypes.c_uint64),
+                        ]
+
+                    class _ExtendedLimit(ctypes.Structure):
+                        _fields_ = [
+                            ("BasicLimitInformation", _BasicLimit),
+                            ("IoInfo", _IoCounters),
+                            ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                            ("PeakJobMemoryUsed", ctypes.c_size_t),
+                        ]
+
+                    job = kernel32.CreateJobObjectW(None, None)
+                    if job:
+                        info = _ExtendedLimit()
+                        info.BasicLimitInformation.LimitFlags = kill_on_close | process_memory | job_memory
+                        info.ProcessMemoryLimit = MAX_MEMORY_BYTES
+                        info.JobMemoryLimit = MAX_MEMORY_BYTES
+                        kernel32.SetInformationJobObject(job, job_extended, ctypes.byref(info), ctypes.sizeof(info))
+                        job_handle = job
+                except Exception:
+                    job_handle = None
+
+            proc = subprocess.Popen(
                 command,
                 cwd=work,
                 env=_child_env(),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
                 creationflags=creationflags,
             )
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout or ""
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode("utf-8", errors="replace")
+
+            if job_handle and proc:
+                try:
+                    import ctypes
+                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                    proc_handle = getattr(proc, "_handle", None)
+                    if proc_handle:
+                        kernel32.AssignProcessToJobObject(job_handle, int(proc_handle))
+                except Exception:
+                    pass
+
+            stdout_text, stderr_text = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                if sys.platform == "win32":
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                            capture_output=True,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+                try:
+                    out, _ = proc.communicate(timeout=0.5)
+                    stdout_text = out or ""
+                except Exception:
+                    pass
             return {
                 "status": "timeout",
-                "stdout": str(stdout)[:MAX_OUTPUT_CHARS],
+                "stdout": str(stdout_text)[:MAX_OUTPUT_CHARS],
                 "stderr": "",
                 "exception_type": "TimeoutError",
                 "exception_message": f"超过 {timeout:g} 秒仍未结束",
@@ -465,9 +551,17 @@ def run_student_code(
                 "truncated": False,
                 "latency_ms": int(timeout * 1000),
             }
+        finally:
+            if job_handle:
+                try:
+                    import ctypes
+                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                    kernel32.CloseHandle(job_handle)
+                except Exception:
+                    pass
 
         if not result_path.is_file():
-            detail = (completed.stderr or completed.stdout or "沙箱没有返回结果").strip()
+            detail = (stderr_text or stdout_text or "沙箱没有返回结果").strip()
             if "MemoryError" in detail or "内存上限" in detail:
                 return _empty_result(
                     "memory",

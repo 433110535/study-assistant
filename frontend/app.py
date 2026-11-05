@@ -1599,74 +1599,56 @@ def _render_standard_grade():
 
 
 def render_kb():
+    from backend.api.local_client import (
+        get_documents_api,
+        ingest_document_api,
+        delete_document_api,
+        search_documents_api,
+        ask_documents_api,
+    )
+
     page_header("kb", chips=[
-        "<b>检索</b> FAISS · 1024d",
-        "<b>来源</b> PDF 文档",
+        "<b>存储</b> 本地向量索引与 SQLite 元数据",
+        "<b>服务</b> 走 /v1/documents 标准 API",
     ])
-
-    if not FAISS_KB_AVAILABLE:
-        st.warning("向量知识库需要安装FAISS")
-        st.markdown("""
-        ### 安装步骤
-
-        运行以下命令安装依赖：
-
-        ```bash
-        pip install faiss-cpu pypdf
-        ```
-
-        然后重启应用。
-        """)
-        return
 
     # 功能说明
     with st.expander("向量知识库说明", expanded=False):
         st.markdown("""
         **什么是向量知识库（RAG）？**
 
-        向量知识库使用AI技术将你的文档转换成向量（数字），然后通过计算相似度来搜索相关内容。
+        向量知识库使用 AI 将文档切块并转化为向量，通过语义相似度检索最相关的内容。
 
-        **与传统搜索的区别：**
-        - 传统搜索：只能匹配关键词，例如搜"Python列表"找不到"Python数组"
-        - 向量搜索：理解语义，能找到意思相近的内容
-
-        **功能：**
-        1. 上传PDF文档（自动提取文本、分割、向量化）
-        2. 向量搜索（找到语义相关的内容）
-        3. RAG问答（AI基于检索到的内容回答问题）
-
-        **使用场景：**
-        - 上传课本、笔记PDF，然后问相关问题
-        - AI会先从你的文档中找到相关内容，再回答
-        - 答案准确、贴合你的学习资料
+        **优势：**
+        - 支持语义理解，即使没有精确命中关键词也能找到相关段落。
+        - 增强回答准确性，避免模型胡编乱造。
+        - 支持课本、试卷、讲义的结构化管理。
         """)
 
-    # 初始化知识库（如果还没初始化）
-    if 'vector_kb' not in st.session_state:
-        with st.spinner("正在加载向量知识库..."):
-            try:
-                st.session_state.vector_kb = FAISSKnowledgeBase()
-            except Exception as e:
-                st.error(f"加载失败: {str(e)}")
-                return
+    try:
+        doc_data = get_documents_api()
+    except Exception as e:
+        st.error(f"无法连接知识库服务: {e}")
+        return
 
-    kb = st.session_state.vector_kb
+    docs = doc_data.get("documents", [])
+    stats = doc_data.get("stats", {})
+    total_docs = doc_data.get("total_documents", len(docs))
+    total_chunks = doc_data.get("total_chunks", sum(int(d.get("chunks", 0)) for d in docs))
 
     # 显示统计信息
-    stats = kb.get_stats()
     st.markdown(
         '<div class="kb-stats">'
         f'<div class="kb-stat"><div class="kb-stat-k">文档数</div>'
-        f'<div class="kb-stat-v">{stats.get("total_documents", 0)}</div></div>'
+        f'<div class="kb-stat-v">{total_docs}</div></div>'
         f'<div class="kb-stat"><div class="kb-stat-k">文本块</div>'
-        f'<div class="kb-stat-v">{stats.get("total_chunks", 0)}</div></div>'
+        f'<div class="kb-stat-v">{total_chunks}</div></div>'
         '<div class="kb-stat is-wide"><div class="kb-stat-k">存储位置</div>'
-        '<div class="kb-stat-v is-path">data/faiss_index</div></div>'
+        '<div class="kb-stat-v is-path">data/faiss_index + app.db</div></div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # 使用tabs组织功能
     tab1, tab2, tab3, tab4 = st.tabs(["上传PDF", "文档管理", "向量搜索", "RAG问答"])
 
     with tab1:
@@ -1674,15 +1656,11 @@ def render_kb():
 
         with st.expander("上传说明与计费", expanded=False):
             st.markdown("""
-            上传后系统会自动完成：提取文本 → 按块分割 → 生成向量（1024 维）→ 写入索引。
-
-            - 处理时间：100 页 PDF 约需 1–2 分钟
-            - API 成本：约 0.08 元 / 百页
-            - 建议使用文字版 PDF；扫描版识别效果较差
-            - 支持中英文文档，单个文件最大 50MB
+            上传后系统通过后端 API 自动完成：提取文本 → 分割文本块 → 批量生成向量 → 写入 FAISS 索引与 SQLite documents 元数据表。
+            - 建议使用文字版 PDF；单文件最大 50MB。
+            - 全程通过 FastAPI 服务化接口承载。
             """)
 
-        # PDF文件上传（限制50MB）
         MAX_PDF_SIZE = 50 * 1024 * 1024  # 50MB
         uploaded_file = st.file_uploader(
             "选择PDF文件",
@@ -1691,12 +1669,10 @@ def render_kb():
             key="pdf_uploader"
         )
 
-        # 检查文件大小
         if uploaded_file and hasattr(uploaded_file, 'size') and uploaded_file.size > MAX_PDF_SIZE:
             st.error(f"文件过大: {uploaded_file.size / 1024 / 1024:.1f}MB，最大支持50MB")
             uploaded_file = None
 
-        # 文档信息
         col1, col2 = st.columns(2)
         with col1:
             doc_title = st.text_input(
@@ -1722,7 +1698,7 @@ def render_kb():
                 max_value=1000,
                 value=500,
                 step=100,
-                help="每块包含的字符数，越小越精细但调用API次数越多",
+                help="每块包含的字符数",
                 key="chunk_size"
             )
         with col2:
@@ -1732,112 +1708,64 @@ def render_kb():
                 max_value=100,
                 value=50,
                 step=10,
-                help="相邻块之间重叠的字符数，保留上下文",
+                help="相邻块之间重叠字符数",
                 key="chunk_overlap"
             )
 
         if st.button("开始处理PDF", type="primary", use_container_width=True, key="process_pdf"):
             if uploaded_file is not None:
-                # 保存上传的文件
-                import tempfile
-                import os
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                    tmp_file.write(uploaded_file.getbuffer())
-                    tmp_path = tmp_file.name
-
-                # 使用st.status显示详细进度
-                with st.status("正在处理PDF...", expanded=True) as status:
-                    try:
-                        status.write("步骤1/6: 解析PDF文件...")
-
-                        from backend.knowledge.pdf_loader import extract_text_from_pdf, clean_text
-                        data = extract_text_from_pdf(tmp_path)
-                        text = clean_text(data["text"])
-                        status.write(f"解析成功：{len(text)} 字符，{data['pages']} 页")
-
-                        status.write("步骤2/6: 分割文本...")
-                        from backend.knowledge.embedding import text_split_by_token
-                        chunks = text_split_by_token(text, max_tokens=chunk_size, overlap=chunk_overlap)
-                        status.write(f"分割成 {len(chunks)} 个文本块")
-
-                        status.write("步骤3/6: 生成向量（调用通义千问API）...")
-                        from backend.knowledge.embedding import get_embeddings_batch
-                        embeddings = get_embeddings_batch(chunks)
-                        status.write(f"生成 {len(embeddings)} 个向量")
-
-                        status.write("步骤4/6: 添加到向量索引...")
-                        doc_id = doc_title.replace(" ", "_")
-                        kb.store.add_vectors(
-                            embeddings=embeddings,
-                            doc_id=doc_id,
-                            chunks=chunks,
-                            metadata={
-                                "title": doc_title,
-                                "subject": subject or "未分类",
-                                "created_at": datetime.now().isoformat()
-                            }
-                        )
-
-                        status.write("步骤5/6: 保存元数据...")
-                        kb.doc_info[doc_id] = {
-                            "title": doc_title,
-                            "subject": subject or "未分类",
-                            "created_at": datetime.now().isoformat(),
-                            "chunk_count": len(chunks)
-                        }
-                        kb._save_doc_info()
-
-                        status.write("步骤6/6: 保存向量索引...")
-                        kb.store.save(kb.save_dir)
-
-                        status.update(label="PDF处理完成", state="complete", expanded=False)
-
-                        # 删除临时文件
-                        os.unlink(tmp_path)
-
-                        st.success(f"PDF '{doc_title}' 添加成功！")
-                        time.sleep(1)
-                        st.rerun()
-
-                    except Exception as e:
-                        status.update(label="处理失败", state="error", expanded=False)
-                        st.error(f"处理失败: {str(e)}")
-                        import traceback
-                        with st.expander("错误详情"):
-                            st.code(traceback.format_exc())
-                        # 删除临时文件
+                if not doc_title.strip():
+                    st.warning("请输入文档标题")
+                else:
+                    import base64
+                    with st.status("正在通过后端 API 解析与向量化...", expanded=True) as status:
                         try:
-                            os.unlink(tmp_path)
-                        except:
-                            pass
+                            status.write("步骤 1/2: 上传并编码 PDF 数据...")
+                            raw_bytes = uploaded_file.getvalue()
+                            b64_str = base64.b64encode(raw_bytes).decode("utf-8")
+
+                            status.write("步骤 2/2: 调用后端 /v1/documents 执行切块与索引入库...")
+                            resp = ingest_document_api(
+                                title=doc_title.strip(),
+                                pdf_base64=b64_str,
+                                subject=subject.strip() or "未分类",
+                                chunk_size=chunk_size,
+                                chunk_overlap=chunk_overlap,
+                            )
+                            status.update(label="处理完成！", state="complete", expanded=False)
+                            st.success(f"PDF《{doc_title}》添加成功，已生成 {resp.get('chunks', 0)} 个向量块！")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            status.update(label="处理失败", state="error", expanded=False)
+                            st.error(f"处理失败: {e}")
             else:
                 st.warning("请先上传PDF文件")
 
     with tab2:
         section_head("02", "文档管理", "DOCUMENTS")
 
-        docs = kb.list_documents()
-
         if not docs:
-            st.info("知识库为空，请先上传PDF文档")
+            st.info("知识库为空，请先在第一页上传文档")
         else:
             st.markdown(f"共 **{len(docs)}** 个文档\n")
 
             for i, doc in enumerate(docs):
                 with st.container():
                     col1, col2, col3 = st.columns([3, 2, 1], vertical_alignment="center")
+                    doc_id = doc.get("id") or doc.get("doc_id", "未知")
+                    title = doc.get("title") or doc_id
                     with col1:
-                        title = doc.get('title') or doc.get('doc_id', '未知')
                         st.markdown(f"**{title}**")
                     with col2:
-                        st.caption(f"科目: {doc.get('subject', '未分类')} | {doc.get('chunk_count', 0)} 个文本块")
+                        chunks_cnt = doc.get("chunks") or doc.get("chunk_count", 0)
+                        st.caption(f"科目: {doc.get('subject', '未分类')} | {chunks_cnt} 个文本块")
                     with col3:
                         safe_title = html.escape(str(title))
                         with st.popover("删除", key=f"del_pop_{i}", use_container_width=True):
                             st.markdown(
                                 '<div class="popover-title">删除文档</div>'
-                                f'<div class="popover-body">《{safe_title}》及其全部文本块将被移除，操作不可恢复。</div>',
+                                f'<div class="popover-body">《{safe_title}》及其向量将被彻底移除。</div>',
                                 unsafe_allow_html=True,
                             )
                             dc1, dc2 = st.columns(2)
@@ -1847,12 +1775,12 @@ def render_kb():
                             with dc2:
                                 if st.button("确认删除", key=f"del_confirm_{i}", type="primary", use_container_width=True):
                                     try:
-                                        kb.delete_document(doc['doc_id'])
+                                        delete_document_api(doc_id)
                                         st.success(f"已删除: {title}")
                                         time.sleep(0.5)
                                         st.rerun()
                                     except Exception as e:
-                                        st.error(f"删除失败: {str(e)}")
+                                        st.error(f"删除失败: {e}")
 
                     if i < len(docs) - 1:
                         st.markdown('<div class="doc-sep"></div>', unsafe_allow_html=True)
@@ -1860,28 +1788,16 @@ def render_kb():
     with tab3:
         section_head("03", "向量搜索", "SEARCH")
 
-
         st.info("""
-         **向量搜索说明：**
-
-        向量搜索不是简单的关键词匹配，而是理解问题的**语义**。
-
-        **例子：**
-        - 问："Python中如何创建列表"
-        - 能找到："Python的list类型用于存储序列数据..."
-        - 即使原文没有"创建"这个词
-
-        **使用方法：**
-        1. 输入问题或关键词
-        2. 选择返回多少个结果
-        3. 查看相似度（越接近1越相关）
+        **语义向量搜索说明：**
+        通过语义向量相似度匹配最相关知识点，而非字面关键词。
         """)
 
         st.markdown("---")
 
         search_query = st.text_input(
             "搜索问题",
-            placeholder="输入问题，例如：Python中的列表是什么？",
+            placeholder="输入问题或概念，例如：Python中的列表推导式...",
             key="vector_search_query"
         )
 
@@ -1894,36 +1810,30 @@ def render_kb():
         )
 
         if st.button("向量搜索", use_container_width=True, key="vector_search_btn"):
-            if search_query:
-                with st.spinner("正在向量搜索..."):
+            if search_query.strip():
+                with st.spinner("正在通过后端执行向量搜索..."):
                     try:
-                        results = kb.search(search_query, top_k=top_k)
-
+                        res = search_documents_api(search_query.strip(), top_k=top_k)
+                        results = res.get("results", [])
                         if results:
                             st.success(f"找到 {len(results)} 个相关结果")
-
                             for i, r in enumerate(results, 1):
+                                meta = r.get("metadata", {})
+                                sim = float(r.get("similarity", 0.0))
                                 with st.expander(
-                                    f"结果 {i} · 相似度: {r['similarity']:.2%}",
+                                    f"结果 {i} · 相似度: {sim:.2%}",
                                     expanded=(i == 1)
                                 ):
-                                    st.markdown(f"**来源：** {r['metadata'].get('title', '未知')}")
-                                    st.markdown(f"**科目：** {r['metadata'].get('subject', '未分类')}")
+                                    st.markdown(f"**来源：** {meta.get('title', '未知')}")
+                                    st.markdown(f"**科目：** {meta.get('subject', '未分类')}")
                                     st.markdown("---")
-                                    content_text = r['content'][:500] + "..." if len(r['content']) > 500 else r['content']
-                                    st.markdown(highlight_keywords(content_text, search_query), unsafe_allow_html=True)
+                                    content_text = r.get("content", "")
+                                    display_text = content_text[:500] + "..." if len(content_text) > 500 else content_text
+                                    st.markdown(highlight_keywords(display_text, search_query), unsafe_allow_html=True)
                         else:
-                            st.warning("未找到相关内容，建议：")
-                            st.markdown("""
-                            1. 尝试其他问题或关键词
-                            2. 上传更多相关PDF文档
-                            3. 检查文档是否包含相关内容
-                            """)
-
+                            st.warning("未检索到相关内容，请尝试更通用的描述或上传相关资料。")
                     except Exception as e:
-                        st.error(f"搜索失败: {str(e)}")
-                        import traceback
-                        st.error(traceback.format_exc())
+                        st.error(f"搜索失败: {e}")
             else:
                 st.warning("请输入搜索问题")
 
@@ -1931,34 +1841,17 @@ def render_kb():
         section_head("04", "RAG 问答", "RAG")
 
         st.info("""
-         **RAG = 检索增强生成**
-
-        工作流程：
-        1. 你提出问题
-        2. 系统向量搜索知识库，找到最相关的几段内容
-        3. 将找到的内容和问题一起发给AI
-        4. AI基于这些内容回答问题
-
-        **优势：**
-        - 答案来自你上传的文档
-        - 准确、可靠
-        - 可以问文档相关的问题
-
-        **示例：**
-        - 上传了Python课本PDF
-        - 问："请解释Python中的列表推导式"
-        - AI会从课本中找到相关内容，然后详细解释
+        **RAG = 检索增强生成**
+        通过语义检索知识库文档作为上下文，由 AI 基于准确资料给出回答。
         """)
 
         st.markdown("---")
 
-        # 显示已上传的文档
-        docs = kb.list_documents()
         if docs:
-            st.markdown("**知识库中的文档：**")
-            doc_list = ", ".join([d['title'] or d['doc_id'] for d in docs[:5]])
+            st.markdown("**已索引文档：**")
+            doc_list = ", ".join([d.get("title") or d.get("id", "未知") for d in docs[:5]])
             if len(docs) > 5:
-                doc_list += f" 等{len(docs)}个文档"
+                doc_list += f" 等 {len(docs)} 个文档"
             st.caption(doc_list)
 
         rag_query = st.text_input(
@@ -1967,96 +1860,32 @@ def render_kb():
             key="rag_query"
         )
 
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            use_context = st.checkbox("显示检索到的相关内容", value=False, key="show_context")
-        with col2:
-            st.write("")  # 对齐
+        show_context = st.checkbox("显示检索到的相关内容", value=False, key="show_context")
 
         if st.button("提问", type="primary", use_container_width=True, key="rag_ask_btn"):
-            if rag_query:
-                with st.spinner("AI正在思考..."):
+            if rag_query.strip():
+                with st.spinner("AI 正在检索并回答..."):
                     try:
-                        start_time = time.time()
+                        resp = ask_documents_api(rag_query.strip(), top_k=3)
+                        answer = resp.get("answer", "")
+                        sources = resp.get("sources", [])
+                        results = resp.get("results", [])
 
-                        # 1. 向量搜索
-                        results = kb.search(rag_query, top_k=3)
+                        st.markdown("### 回答")
+                        st.markdown(answer)
 
-                        search_time = time.time() - start_time
+                        if sources:
+                            st.caption(f"参考资料来源：{', '.join(set(sources))}")
 
-                        # 2. 构建上下文
-                        if results:
-                            context = "\n\n".join([
-                                f"【资料{i+1}】(来源: {r['metadata'].get('title', '未知')})\n{r['content']}"
-                                for i, r in enumerate(results)
-                            ])
-                        else:
-                            context = "未找到相关资料。"
-
-                        # 3. 调用AI回答
-                        from backend.llm_helper import get_llm
-                        from langchain_core.prompts import ChatPromptTemplate
-
-                        llm = get_llm(temperature=0.7)
-
-                        prompt = ChatPromptTemplate.from_messages([
-                            ("system", """你是一位智能学习助手。
-
-请根据以下资料回答用户的问题。
-如果资料中有相关信息，请基于资料回答，并标注资料来源。
-如果资料中没有相关信息，请说"抱歉，资料中没有找到相关内容"，然后基于你的知识回答。
-
-【参考资料】
-{context}
-
-回答要求：
-1. 清晰准确
-2. 有条理
-3. 回答中标注具体资料名称，如"根据《资料标题》..."
-4. 回答末尾列出引用的资料来源，格式：参考资料：《标题1》《标题2》
-5. 保持教育性，有助学习"""),
-                            ("human", "{query}")
-                        ])
-
-                        chain = prompt | llm
-                        response = chain.invoke({"query": rag_query, "context": context})
-                        answer = text_content(response.content)
-
-                        # 保存结果到session_state
-                        st.session_state.rag_history = {
-                            "query": rag_query,
-                            "answer": answer,
-                            "results": results,
-                            "search_time": search_time,
-                            "show_context": use_context
-                        }
-
+                        if show_context and results:
+                            with st.expander("查看检索切片", expanded=True):
+                                for idx, item in enumerate(results, 1):
+                                    st.markdown(f"**片段 {idx}** (来源: {item.get('metadata', {}).get('title', '未知')}):")
+                                    st.text(item.get("content", ""))
                     except Exception as e:
-                        st.error(f"回答失败: {str(e)}")
-                        import traceback
-                        st.error(traceback.format_exc())
+                        st.error(f"问答调用失败: {e}")
             else:
                 st.warning("请输入问题")
-
-        # 显示历史RAG结果（持久化，不会因为页面切换丢失）
-        if 'rag_history' in st.session_state and st.session_state.rag_history:
-            hist = st.session_state.rag_history
-            st.markdown("---")
-            st.markdown(f"**问题:** {hist['query']}")
-            st.caption(f"搜索耗时: {hist['search_time']:.2f}秒 | 检索到 {len(hist['results'])} 个相关片段")
-
-            if hist.get('show_context') and hist['results']:
-                with st.expander("检索到的相关内容"):
-                    for i, r in enumerate(hist['results'], 1):
-                        st.markdown(f"**来源{i}**（相似度: {r['similarity']:.2%}） - {r['metadata'].get('title', '未知')}")
-                        rag_content = r['content'][:300] + "..." if len(r['content']) > 300 else r['content']
-                        st.markdown(highlight_keywords(rag_content, hist['query']), unsafe_allow_html=True)
-
-            with st.container(key="rag_answer"):
-                st.markdown(prepare_markdown(hist["answer"]))
-
-        if not docs:
-            st.warning("提示：知识库为空，请先上传PDF文档")
 
 
 def _load_code_attempt(code: str, tests: str) -> None:

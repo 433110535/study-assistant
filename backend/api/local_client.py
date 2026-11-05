@@ -305,3 +305,103 @@ def list_review_cards(user_id: str, db_path: Optional[Path] = None) -> list:
         params={"user_id": user_id},
     )
     return data["cards"]
+
+
+
+def get_documents_api(
+    user_id: str = "student",
+    subject: str = "",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    params = {}
+    if user_id:
+        params["user_id"] = user_id
+    if subject:
+        params["subject"] = subject
+    return request_json("GET", "/v1/documents", db_path=db_path, params=params)
+
+
+def ingest_document_api(
+    title: str,
+    content_text: str = "",
+    pdf_base64: str = "",
+    subject: str = "未分类",
+    chunk_size: int = 500,
+    chunk_overlap: int = 50,
+    user_id: str = "student",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "POST",
+        "/v1/documents",
+        db_path=db_path,
+        json_body={
+            "title": title,
+            "content_text": content_text,
+            "pdf_base64": pdf_base64,
+            "subject": subject,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "user_id": user_id,
+        },
+    )
+
+
+def delete_document_api(
+    doc_id: str,
+    user_id: str = "student",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "DELETE",
+        f"/v1/documents/{doc_id}",
+        db_path=db_path,
+        params={"user_id": user_id},
+    )
+
+
+def search_documents_api(
+    query: str,
+    top_k: int = 5,
+    subject: str = "",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"query": query, "top_k": top_k}
+    if subject:
+        body["subject"] = subject
+    return request_json(
+        "POST",
+        "/v1/documents/search",
+        db_path=db_path,
+        json_body=body,
+    )
+
+
+def ask_documents_api(
+    question: str,
+    top_k: int = 3,
+    subject: str = "",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"question": question, "top_k": top_k}
+    if subject:
+        body["subject"] = subject
+    return request_json(
+        "POST",
+        "/v1/documents/ask",
+        db_path=db_path,
+        json_body=body,
+    )
+
+
+def list_mastery_api(
+    user_id: str = "student",
+    db_path: Optional[Path] = None,
+) -> list:
+    data = request_json(
+        "GET",
+        "/v1/mastery",
+        db_path=db_path,
+        params={"user_id": user_id},
+    )
+    return data.get("mastery", [])

@@ -17,6 +17,16 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from backend.config import TRACE_DB_PATH
+from backend.platform.domain_store import (
+    init_domain_db,
+    add_document_record,
+    list_document_records,
+    delete_document_record,
+    sync_legacy_documents,
+    upsert_mastery,
+    list_mastery,
+    log_write_audit,
+)
 
 
 def _break_minutes(value: Any) -> Optional[int]:
@@ -92,8 +102,11 @@ def create_app(
     plan_fn: Optional[Callable[..., str]] = None,
     schedule_fn: Optional[Callable[..., str]] = None,
     paper_fn: Optional[Callable[..., Dict[str, Any]]] = None,
+    kb_factory: Optional[Callable[[], Any]] = None,
+    rag_ask_fn: Optional[Callable[..., str]] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
+    init_domain_db(database)
     app = FastAPI(title="学习助手", version="0.1.0")
 
     def require_key(x_api_key: str = Header(default="")) -> None:
@@ -377,6 +390,172 @@ def create_app(
             "diagnosed": diagnose_error(question, student, correct),
             "variants": make_variants(question, 3),
         }
+
+
+    def get_kb() -> Any:
+        if kb_factory is not None:
+            return kb_factory()
+        try:
+            from backend.knowledge.knowledge_base_faiss import FAISSKnowledgeBase
+            return FAISSKnowledgeBase()
+        except Exception:
+            return None
+
+    @app.get("/v1/documents", dependencies=guard)
+    def get_documents_route(user_id: str = "student", subject: str = "") -> dict:
+        sync_legacy_documents(database)
+        docs = list_document_records(user_id=user_id or None, subject=subject or None, db_path=database)
+        kb = get_kb()
+        stats = kb.get_stats() if kb and hasattr(kb, "get_stats") else {}
+        return {
+            "documents": docs,
+            "total_documents": len(docs),
+            "total_chunks": sum(int(d.get("chunks", 0)) for d in docs),
+            "stats": stats,
+            "index_version": "faiss_v1",
+        }
+
+    @app.post("/v1/documents", dependencies=guard)
+    def create_document(payload: dict = Body(...)) -> dict:
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title 不能为空")
+        subject = str(payload.get("subject") or "未分类").strip() or "未分类"
+        user_id = str(payload.get("user_id") or "student").strip() or "student"
+        content_text = str(payload.get("content_text") or "")
+        pdf_base64 = str(payload.get("pdf_base64") or "")
+        chunk_size = int(payload.get("chunk_size", 500))
+        chunk_overlap = int(payload.get("chunk_overlap", 50))
+        doc_id = str(payload.get("doc_id") or title.replace(" ", "_")).strip()
+
+        kb = get_kb()
+        chunks = 0
+        if pdf_base64 and kb is not None:
+            import base64
+            import tempfile
+            raw = base64.b64decode(pdf_base64)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(raw)
+                tmp_path = tmp.name
+            try:
+                ok = kb.add_pdf(
+                    tmp_path,
+                    doc_id=doc_id,
+                    title=title,
+                    subject=subject,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+                if not ok:
+                    raise HTTPException(status_code=500, detail="PDF 处理失败")
+                doc_rec = getattr(kb, "doc_info", {}).get(doc_id, {})
+                chunks = doc_rec.get("chunk_count", 0)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+        elif content_text and kb is not None:
+            ok = kb.add_text(
+                content_text,
+                doc_id=doc_id,
+                title=title,
+                subject=subject,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            if not ok:
+                raise HTTPException(status_code=500, detail="文本处理失败")
+            doc_rec = getattr(kb, "doc_info", {}).get(doc_id, {})
+            chunks = doc_rec.get("chunk_count", 0)
+        else:
+            chunks = int(payload.get("chunks", 0))
+
+        add_document_record(
+            doc_id=doc_id,
+            title=title,
+            path="",
+            subject=subject,
+            chunks=chunks,
+            user_id=user_id,
+            db_path=database,
+        )
+        trace_id = log_write_audit(
+            "kb_add_document",
+            {"doc_id": doc_id, "title": title, "subject": subject, "chunks": chunks},
+            user_id=user_id,
+            db_path=database,
+        )
+        return {"doc_id": doc_id, "title": title, "chunks": chunks, "trace_id": trace_id}
+
+    @app.delete("/v1/documents/{doc_id}", dependencies=guard)
+    def remove_document(doc_id: str, user_id: str = "student") -> dict:
+        kb = get_kb()
+        if kb is not None and hasattr(kb, "delete_document"):
+            kb.delete_document(doc_id)
+        delete_document_record(doc_id, user_id=user_id, db_path=database)
+        trace_id = log_write_audit(
+            "kb_delete_document",
+            {"doc_id": doc_id},
+            user_id=user_id,
+            db_path=database,
+        )
+        return {"deleted": True, "doc_id": doc_id, "trace_id": trace_id}
+
+    @app.post("/v1/documents/search", dependencies=guard)
+    def search_documents_route(payload: dict = Body(...)) -> dict:
+        query = str(payload.get("query") or "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="query 不能为空")
+        top_k = int(payload.get("top_k", 5))
+        subject = payload.get("subject")
+        kb = get_kb()
+        results = kb.search(query, top_k=top_k, subject=subject) if kb and hasattr(kb, "search") else []
+        return {"results": results, "count": len(results)}
+
+    @app.post("/v1/documents/ask", dependencies=guard)
+    def ask_documents_route(payload: dict = Body(...)) -> dict:
+        question = str(payload.get("question") or "").strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="question 不能为空")
+        top_k = int(payload.get("top_k", 3))
+        subject = payload.get("subject")
+        kb = get_kb()
+        results = kb.search(question, top_k=top_k, subject=subject) if kb and hasattr(kb, "search") else []
+        if rag_ask_fn is not None:
+            answer = rag_ask_fn(question, results)
+        else:
+            if results:
+                context = "\n\n".join([
+                    f"【资料{i+1}】(来源: {r.get('metadata', {}).get('title', '未知')})\n{r.get('content', '')}"
+                    for i, r in enumerate(results)
+                ])
+            else:
+                context = "未找到相关资料。"
+            try:
+                from backend.llm_helper import get_llm
+                from langchain_core.prompts import ChatPromptTemplate
+                llm = get_llm(temperature=0.7)
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", "你是一个学习助手。请根据以下参考资料回答用户的问题。如果资料中没有相关信息，请如实说明，并结合自己的知识简要回答。\n\n参考资料：\n{context}"),
+                    ("user", "{question}"),
+                ])
+                chain = prompt | llm
+                resp = chain.invoke({"context": context, "question": question})
+                answer = resp.content if hasattr(resp, "content") else str(resp)
+            except Exception as e:
+                answer = f"AI回答生成失败: {e}"
+
+        sources = [r.get("metadata", {}).get("title", "未知") for r in results]
+        trace_id = log_write_audit(
+            "rag_ask",
+            {"question": question, "sources_count": len(sources)},
+            user_id="student",
+            db_path=database,
+        )
+        return {"answer": answer, "sources": sources, "results": results, "trace_id": trace_id}
+
+    @app.get("/v1/mastery", dependencies=guard)
+    def mastery_route(user_id: str = "student") -> dict:
+        return {"mastery": list_mastery(user_id, db_path=database)}
 
     return app
 

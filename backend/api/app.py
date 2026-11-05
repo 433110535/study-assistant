@@ -368,12 +368,61 @@ def create_app(
         text = str(payload.get("text") or "")
         if not text.strip():
             raise HTTPException(status_code=400, detail="text 不能为空")
+        enhanced = bool(payload.get("enhanced", False))
+        auto_collect = bool(payload.get("auto_collect_mistakes", False))
+        user_id = str(payload.get("user_id") or "student").strip() or "student"
+        subject = str(payload.get("subject") or "数学").strip() or "数学"
+
         fn = paper_fn
         if fn is None:
             from backend.tools.grading import grade_paper
 
             fn = grade_paper
-        return fn(text)
+        import inspect
+
+        sig = inspect.signature(fn)
+        if "enhanced" in sig.parameters:
+            result = fn(text, enhanced=enhanced)
+        else:
+            result = fn(text)
+
+        if not auto_collect:
+            return result
+
+        from backend.platform.domain_store import upsert_mastery
+        from backend.platform.mistake_store import create_pending
+        from backend.tools.grading import diagnose_error
+
+        collected_ids = []
+        for item in result.get("items", []):
+            st = item.get("status")
+            concept = item.get("concept") or "综合考点"
+            delta = 0.1 if st == "correct" else (-0.15 if st in ("incorrect", "partial") else 0.0)
+            upsert_mastery(concept=concept, is_correct=(st == 'correct'), user_id=user_id, db_path=database)
+
+            if st in ("incorrect", "partial"):
+                q_text = str(item.get("question") or "")
+                s_ans = str(item.get("student_answer") or "")
+                c_ans = str(item.get("correct_answer") or "")
+                diag = diagnose_error(q_text, s_ans, c_ans)
+                c_name = diag.get("concept") or concept
+                e_type = diag.get("error_type") or "理解错误"
+                m_id = create_pending(
+                    user_id=user_id,
+                    subject=subject,
+                    concept=c_name,
+                    error_type=e_type,
+                    question_text=q_text,
+                    student_answer=s_ans,
+                    correct_answer=c_ans,
+                    db_path=database,
+                )
+                collected_ids.append(m_id)
+
+        resp = dict(result)
+        resp["collected_mistake_ids"] = collected_ids
+        resp["collected_count"] = len(collected_ids)
+        return resp
 
     @app.post("/v1/items/grade", dependencies=guard)
     def grade_one(payload: dict = Body(...)) -> dict:

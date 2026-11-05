@@ -112,12 +112,26 @@ def create_user_mistake(
     )
 
 
-def grade_paper_text(text: str, db_path: Optional[Path] = None) -> Dict[str, Any]:
+def grade_paper_text(
+    text: str,
+    enhanced: bool = False,
+    auto_collect_mistakes: bool = False,
+    user_id: str = "student",
+    subject: str = "数学",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"text": text}
+    if enhanced:
+        body["enhanced"] = True
+    if auto_collect_mistakes:
+        body["auto_collect_mistakes"] = True
+        body["user_id"] = user_id
+        body["subject"] = subject
     return request_json(
         "POST",
         "/v1/papers/grade",
         db_path=db_path,
-        json_body={"text": text},
+        json_body=body,
     )
 
 

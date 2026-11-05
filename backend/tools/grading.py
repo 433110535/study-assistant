@@ -29,6 +29,147 @@ _FACTORS = (2.0, 0.5, 10.0, 0.1, 100.0, 0.01)
 _ARITH_OPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow, ast.USub, ast.UAdd)
 
 
+
+
+# =======================================================
+# 增强判分引擎（第二战役：多选、多空、带单位量纲换算）
+# =======================================================
+
+_UNIT_FACTORS = {
+    # 长度（基准：米 m）
+    "mm": ("length", 0.001),
+    "cm": ("length", 0.01),
+    "dm": ("length", 0.1),
+    "m": ("length", 1.0),
+    "km": ("length", 1000.0),
+    "毫米": ("length", 0.001),
+    "厘米": ("length", 0.01),
+    "分米": ("length", 0.1),
+    "米": ("length", 1.0),
+    "千米": ("length", 1000.0),
+    "公里": ("length", 1000.0),
+    # 质量（基准：千克 kg）
+    "mg": ("mass", 0.000001),
+    "g": ("mass", 0.001),
+    "kg": ("mass", 1.0),
+    "t": ("mass", 1000.0),
+    "克": ("mass", 0.001),
+    "千克": ("mass", 1.0),
+    "吨": ("mass", 1000.0),
+    # 速度（基准：米/秒 m/s）
+    "m/s": ("speed", 1.0),
+    "km/h": ("speed", 1.0 / 3.6),
+    "米/秒": ("speed", 1.0),
+    "千米/小时": ("speed", 1.0 / 3.6),
+    "千米/时": ("speed", 1.0 / 3.6),
+    # 时间（基准：秒 s）
+    "s": ("time", 1.0),
+    "min": ("time", 60.0),
+    "h": ("time", 3600.0),
+    "秒": ("time", 1.0),
+    "分": ("time", 60.0),
+    "分钟": ("time", 60.0),
+    "小时": ("time", 3600.0),
+}
+
+
+def _extract_choices(text: str) -> set:
+    found = re.findall(r"[A-Ha-h]", text or "")
+    return {ch.upper() for ch in found}
+
+
+def _grade_multi_choice(student: str, accepted: List[str]) -> Optional[Dict[str, Any]]:
+    student_set = _extract_choices(student)
+    if not student_set:
+        return None
+    for ans in accepted:
+        ans_set = _extract_choices(ans)
+        if not ans_set:
+            continue
+        if student_set == ans_set:
+            return {"status": "correct", "score": 1, "reason": "多选全部选对"}
+        if student_set.issubset(ans_set):
+            return {"status": "partial", "score": 0.5, "reason": "多选漏选"}
+        return {"status": "incorrect", "score": 0, "reason": "多选含错选"}
+    return None
+
+
+def _parse_unit_number(text: str) -> Optional[tuple]:
+    norm = _normalize(text)
+    m = re.match(r"^([+-]?\d+(?:\.\d+)?)\s*([a-zA-Z°%Ωμµ/^一-龥]+)$", norm)
+    if not m:
+        return None
+    val_str, unit_str = m.group(1), m.group(2).lower()
+    try:
+        val = float(val_str)
+        return val, unit_str
+    except ValueError:
+        return None
+
+
+def _grade_unit_number(student: str, accepted: List[str]) -> Optional[Dict[str, Any]]:
+    stu_parsed = _parse_unit_number(student)
+    if not stu_parsed:
+        return None
+    stu_val, stu_unit = stu_parsed
+    stu_dim_info = _UNIT_FACTORS.get(stu_unit)
+
+    for ans in accepted:
+        ans_parsed = _parse_unit_number(ans)
+        if not ans_parsed:
+            continue
+        ans_val, ans_unit = ans_parsed
+        ans_dim_info = _UNIT_FACTORS.get(ans_unit)
+
+        if stu_dim_info and ans_dim_info:
+            stu_dim, stu_factor = stu_dim_info
+            ans_dim, ans_factor = ans_dim_info
+            if stu_dim == ans_dim:
+                base_stu = stu_val * stu_factor
+                base_ans = ans_val * ans_factor
+                if _close(base_stu, base_ans):
+                    return {"status": "correct", "score": 1, "reason": "数值与单位经换算后一致"}
+                else:
+                    return {"status": "incorrect", "score": 0, "reason": "单位量纲匹配但数值换算后不一致"}
+            else:
+                return {"status": "incorrect", "score": 0, "reason": "量纲类型不匹配"}
+        elif stu_unit == ans_unit:
+            if _close(stu_val, ans_val):
+                return {"status": "correct", "score": 1, "reason": "数值与单位一致"}
+            else:
+                return {"status": "incorrect", "score": 0, "reason": "单位一致但数值不匹配"}
+        else:
+            if _close(stu_val, ans_val):
+                return {"status": "partial", "score": 0.5, "reason": "数值正确但单位不匹配"}
+    return None
+
+
+def _split_blanks(text: str) -> List[str]:
+    return [part.strip() for part in re.split(r"[;；|，,]", text or "") if part.strip()]
+
+
+def _grade_multi_blank(student: str, accepted: List[str]) -> Optional[Dict[str, Any]]:
+    stu_blanks = _split_blanks(student)
+    if len(stu_blanks) < 2:
+        return None
+    for ans in accepted:
+        ans_blanks = _split_blanks(ans)
+        if len(ans_blanks) != len(stu_blanks):
+            continue
+        matched = 0
+        for s_b, a_b in zip(stu_blanks, ans_blanks):
+            res = grade_item("空", s_b, a_b)
+            if res.get("status") == "correct":
+                matched += 1
+        if matched == len(ans_blanks):
+            return {"status": "correct", "score": 1, "reason": "所有填空全部正确"}
+        elif matched > 0:
+            return {"status": "partial", "score": round(matched / len(ans_blanks), 2), "reason": f"部分填空正确 ({matched}/{len(ans_blanks)})"}
+        else:
+            return {"status": "incorrect", "score": 0, "reason": "所有填空均不正确"}
+    return None
+
+
 def _normalize(text: str) -> str:
     value = unicodedata.normalize("NFKC", text or "")
     value = value.strip().lower()
@@ -68,6 +209,8 @@ def grade_item(
     question_text: str,
     student_answer: str,
     correct_answer: str = "",
+    *,
+    enhanced: bool = False,
 ) -> Dict[str, Any]:
     """对照标准答案打分。correct_answer 可用 || 分隔多个可接受答案。"""
     question = (question_text or "").strip()
@@ -83,6 +226,18 @@ def grade_item(
         }
     if not student:
         return {"status": "incorrect", "score": 0, "reason": "未作答"}
+
+    if enhanced:
+        if "多选" in question or len(_extract_choices(correct_answer)) >= 2:
+            mc = _grade_multi_choice(student, accepted)
+            if mc:
+                return mc
+        ub = _grade_unit_number(student, accepted)
+        if ub:
+            return ub
+        mb = _grade_multi_blank(student, accepted)
+        if mb:
+            return mb
 
     student_norm = _normalize(student)
     student_num = _to_number(student)
@@ -199,6 +354,8 @@ def _unsupported_reason(stem: str) -> str:
 def grade_paper(
     paper_text: str,
     answer_key: Optional[Dict[str, Any]] = None,
+    *,
+    enhanced: bool = False,
 ) -> Dict[str, Any]:
     """按题号拆整卷，并用 grade_item 做离线判分。
 
@@ -206,14 +363,24 @@ def grade_paper(
     标准答案写在「标准答案：」行，或由 answer_key 按题号提供。两边都有时以 answer_key 为准。
     题型不支持时 status 为 unsupported，即使没有作答也不改成 ungraded。
     """
-    # 题干按原样保留。全半角折算只发生在 grade_item 比较答案时。
     text = paper_text or ""
     items: List[Dict[str, Any]] = []
     for number, body in _split_questions(text):
         question_text, student_answer, inline_correct = _parse_question_body(body)
         keyed = _lookup_answer_key(answer_key, number)
         correct_answer = keyed if keyed else inline_correct
-        reason = _unsupported_reason(question_text)
+
+        if not enhanced:
+            reason = _unsupported_reason(question_text)
+        else:
+            # 在增强模式下，多选、多空、带单位题型交给 enhanced grade_item 判分
+            if _ESSAY_RE.search(question_text):
+                reason = "解答题不在离线判分范围内"
+            elif "公式" in question_text or (_LATEX_RE.search(question_text) and not correct_answer):
+                reason = "公式题不在离线判分范围内"
+            else:
+                reason = ""
+
         if reason:
             status: str = "unsupported"
             score = None
@@ -222,10 +389,11 @@ def grade_paper(
             score = None
             reason = "没有标准答案，不能判分" if not correct_answer else "没有作答，不能判分"
         else:
-            graded = grade_item(question_text, student_answer, correct_answer)
-            status = graded["status"] if graded["status"] in {"correct", "incorrect"} else "ungraded"
-            score = graded["score"] if status in {"correct", "incorrect"} else None
+            graded = grade_item(question_text, student_answer, correct_answer, enhanced=enhanced)
+            status = graded["status"] if graded["status"] in {"correct", "incorrect", "partial"} else "ungraded"
+            score = graded["score"] if status in {"correct", "incorrect", "partial"} else None
             reason = graded.get("reason") or ""
+
         items.append(
             {
                 "number": number,
@@ -239,7 +407,7 @@ def grade_paper(
         )
     return {
         "items": items,
-        "graded_count": sum(item["status"] in {"correct", "incorrect"} for item in items),
+        "graded_count": sum(item["status"] in {"correct", "incorrect", "partial"} for item in items),
         "ungraded_count": sum(item["status"] in {"ungraded", "unsupported"} for item in items),
     }
 

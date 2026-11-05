@@ -97,9 +97,10 @@ class TestPdfLoader(unittest.TestCase):
     def test_extract_pdf(self):
         from backend.knowledge.pdf_loader import clean_text, extract_text_from_pdf
 
-        pdfs = sorted(PROJECT_ROOT.glob("*.pdf"))
+        fixture_dir = PROJECT_ROOT / "tests" / "fixtures"
+        pdfs = sorted(fixture_dir.glob("*.pdf")) + sorted(PROJECT_ROOT.glob("*.pdf"))
         if not pdfs:
-            self.skipTest("项目根目录没有 PDF 样本")
+            self.skipTest("没有可用的 PDF 样本")
         smallest = min(pdfs, key=lambda p: p.stat().st_size)
         data = extract_text_from_pdf(str(smallest))
         self.assertGreater(data["pages"], 0)

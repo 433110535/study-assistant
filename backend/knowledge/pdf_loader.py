@@ -31,12 +31,12 @@ def extract_text_from_pdf(pdf_path: str) -> Dict:
 
     try:
         reader = pypdf.PdfReader(pdf_path)
-        metadata = reader.metadata
+        metadata = reader.metadata or {}
 
         # 提取所有页的文本
         text_parts = []
         for page_num, page in enumerate(reader.pages, 1):
-            page_text = page.extract_text()
+            page_text = page.extract_text() or ""
             if page_text.strip():
                 text_parts.append(page_text)
 

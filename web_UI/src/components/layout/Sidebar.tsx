@@ -21,7 +21,7 @@ export interface NavItem {
   phase?: string;
 }
 
-export const NAV_ITEMS: NavItem[] = [
+const NAV_ITEMS: NavItem[] = [
   { id: 'overview', label: '概览 OVERVIEW', path: '/', icon: LayoutDashboard },
   { id: 'chat', label: '对话 CHAT', path: '/chat', icon: MessageSquare, phase: 'U2' },
   { id: 'practice', label: '练习 PRACTICE', path: '/practice', icon: PenTool, phase: 'U3' },
@@ -65,6 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={onToggleCollapse}
           className="hidden lg:flex items-center justify-center w-6 h-6 rounded-sm text-[#A1A1AA] hover:text-white hover:bg-[#141414] border border-transparent hover:border-[rgba(65,65,65,0.8)] transition-colors"
           title={collapsed ? '展开侧栏' : '收起侧栏'}
+          aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
         >
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
         </button>
@@ -79,6 +80,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.path}
               onClick={() => onNavigate(item.path)}
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={item.label}
               className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-sm text-xs font-bold uppercase tracking-label transition-colors ${
                 isActive
                   ? 'bg-[#141414] text-[#FAFF69]'
@@ -134,7 +137,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <Dialog.Overlay className="fixed inset-0 bg-black/85 z-40 md:hidden" />
           <Dialog.Content className="fixed top-0 left-0 bottom-0 w-[248px] bg-[#0A0A0A] z-50 md:hidden focus:outline-none">
             <div className="absolute right-2 top-3 z-10">
-              <Dialog.Close className="p-1.5 rounded-sm text-[#A1A1AA] hover:text-white bg-[#141414] border border-[rgba(65,65,65,0.8)]">
+              <Dialog.Close
+                aria-label="关闭移动端导航"
+                title="关闭移动端导航"
+                className="p-1.5 rounded-sm text-[#A1A1AA] hover:text-white bg-[#141414] border border-[rgba(65,65,65,0.8)]"
+              >
                 <X className="w-4 h-4" />
               </Dialog.Close>
             </div>

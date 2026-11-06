@@ -2,7 +2,12 @@ import React, { useState } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { AppShell } from './components/layout/AppShell';
 import { OverviewPage } from './pages/Overview';
-import { PlaceholderPage } from './pages/PlaceholderPage';
+import { ChatPage } from './pages/Chat/ChatPage';
+import { PracticePage } from './pages/Practice/PracticePage';
+import { ReviewPage } from './pages/Review/ReviewPage';
+import { KnowledgePage } from './pages/Knowledge/KnowledgePage';
+import { CodePage } from './pages/Code/CodePage';
+
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,50 +36,15 @@ const AppContent: React.FC = () => {
       case '/':
         return <OverviewPage onNavigate={setCurrentPath} />;
       case '/chat':
-        return (
-          <PlaceholderPage
-            title="智能答疑会话 (CHAT)"
-            phase="U2"
-            description="基于 SSE 流式打字机响应、多轮会话树形管理与拍照 OCR 自动识题。"
-            onBack={() => setCurrentPath('/')}
-          />
-        );
+        return <ChatPage />;
       case '/practice':
-        return (
-          <PlaceholderPage
-            title="题库自测训练 (PRACTICE)"
-            phase="U3"
-            description="难度梯度出题、选项互锁交互与全自动 AI 批改解析。"
-            onBack={() => setCurrentPath('/')}
-          />
-        );
+        return <PracticePage onNavigate={setCurrentPath} />;
       case '/review':
-        return (
-          <PlaceholderPage
-            title="错题复习 (REVIEW)"
-            phase="U4"
-            description="艾宾浩斯抗遗忘时间轴、错因标签化归类与掌握度升级机制。"
-            onBack={() => setCurrentPath('/')}
-          />
-        );
+        return <ReviewPage onNavigate={setCurrentPath} />;
       case '/knowledge':
-        return (
-          <PlaceholderPage
-            title="知识库文档 (KNOWLEDGE)"
-            phase="U4"
-            description="PDF 拖拽分块解析、SQLite 与向量分块双写检索与溯源查看。"
-            onBack={() => setCurrentPath('/')}
-          />
-        );
+        return <KnowledgePage onNavigate={setCurrentPath} />;
       case '/code':
-        return (
-          <PlaceholderPage
-            title="代码助教 (CODE)"
-            phase="U5"
-            description="Monaco 编辑器、沙箱安全隔离执行与多阶段 AI 渐进式启发。"
-            onBack={() => setCurrentPath('/')}
-          />
-        );
+        return <CodePage />;
       default:
         return <OverviewPage onNavigate={setCurrentPath} />;
     }

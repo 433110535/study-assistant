@@ -23,7 +23,9 @@
 | 代码执行助教 | ✅ | 工业级硬化沙箱、分级提示（Level 1~3），同一次练习的每次运行写入 `code_attempts`。子进程使用 Windows Job Object（64MB 提交内存上限 + KILL_ON_JOB_CLOSE 原子级级联终止）+ taskkill 进程树强杀兜底 + 管道截断与输出洪水保护；`test_m3_sandbox_hardening` 覆盖死循环超时、内存超限、恶意逃逸与分级提示 | 纯本机沙箱，无 Docker 容器 |
 | 口语 / 联网 / 双 Agent | ⬜ | — | 未开工 |
 | 服务拆分与中台 | 🟡 | 数据中台（数据集自检清洗 + 评测预算硬熔断 circuit breaker）；主要页面已走 API；底层采用 `sqlite3.backup` + WAL checkpoint 刷盘，通过 `/v1/database/backup` 与 `/v1/database/restore` 完成 11 张业务表生产级全量破坏性灾备恢复演练 | Web UI 所需接口已全部提供（F1–F8）；聊天历史、代码助教、识图在 Streamlit 内仍直连，页面尚未接入新接口；纯本机部署已闭环 |
-| Web UI 前端 | ⬜ | 方案见第 13 节：React + Vite、ClickHouse 风格、单机自用、第一版 6 页 | 尚未创建 `web_UI/` |
+| Web UI 前端 | 🟡 | 方案见第 13 节；U1（脚手架、token、AppShell、概览）已完成并提交，`web_UI/` 已跟踪 | U2–U6 未做，5 页仍是占位 |
+
+> 底座缺口盘点见第 15 节（2026-11-06）。
 
 第 1 节保留改造前的诊断，用来对照缺口；以本节为准看当前进度。
 
@@ -1490,3 +1492,94 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 完成后 npm run build，浏览器按 1440/1024/390 截图，更新 PLAN 13.11，再继续 U2–U6。
 不要改 Streamlit 和后端。
 ```
+
+---
+
+## 15. 底座缺口盘点（2026-11-06）
+
+> 按原计划继续 U2–U6；本节只记录底座缺口，不插队。
+> 状态：✅ 已有 · 🟡 部分 · ⬜ 缺失。
+
+### 15.1 数据中台底座
+
+| 能力 | 现状 | 缺口 | 优先级 |
+|---|---|---|---|
+| 数据集目录/版本 | 🟡 `dataset_catalog.register_file/list_versions`；`/v1/datasets` 只返回列表 | 版本详情、样本、校验结果、changelog、版本对比；无详情/样本 API | P1 |
+| Trace 浏览 | 🟡 `trace_store.get_trace/get_run` + `/v1/traces/{id}` | 运行列表、筛选、分页、导出；概览只有最近 5 条 | P1 |
+| 指标趋势 | 🟡 dashboard summary + `/v1/eval/latest` | 按天趋势、按工具/模型切片、成本/延迟分布 | P1 |
+| 评测历史 | 🟡 `eval_runs` + `save_eval_run` + `/v1/eval/latest` | run 列表、详情、版本对比、门禁历史 | P1 |
+| 数据质量 | 🟡 `validate_and_clean_dataset` 有清洗 | PII/重复/缺失/保留期汇总与查询接口；评测里 `pii/injection` 仍是 not_checked | P1 |
+| 血缘 | ⬜ documents/chunks 有 `doc_id`，但 retrieval→answer→eval 未全链路落库 | 无法按回答反查 chunk/prompt/index 版本 | P1 |
+| 成本 | 🟡 `llm_cost` + `runs.cost_yuan` | 成本汇总、预算看板、按模型/用户切片 | P1 |
+
+### 15.2 评测中台底座
+
+| 能力 | 现状 | 缺口 | 优先级 |
+|---|---|---|---|
+| 评测集版本 | 🟡 v1–v5 文件 + `dataset_catalog` | 数据集注册与 `eval_run` 的版本对比未完全打通 | P1 |
+| Judge 校准 | 🟡 `calibrate_faithfulness_judge` + 黄金集测试 | 校准报告未持久化、无漂移监控、无人工复核队列 | P1 |
+| 在线评测 | ⬜ 只有离线 `--dry-run/--live` | 线上抽样、影子流量、用户反馈回流 | P2 |
+| 发布门禁 | 🟡 `check_release_gate` + `.github/workflows/eval-gate.yml` | CI 只跑 9 个测试模块；未覆盖 API/前端构建；门禁只看工具选择/忠实度 | P0（CI）/P1（门禁扩展） |
+| 失败归因 | 🟡 看板 + `/v1/eval/latest` | 历史趋势、版本对比、Top N、按工具切片 | P1 |
+| 评测污染 | ⬜ 无自动检查 | 与文档库/线上样本的 n-gram 重叠、holdout 管理 | P2 |
+
+### 15.3 运行时与工程底座
+
+| 能力 | 现状 | 缺口 | 优先级 |
+|---|---|---|---|
+| 持久化 | 🟡 SQLite 单机；11 张业务表；`db_backup` | 无 Postgres/迁移框架/连接池；多用户并发有限 | P2 |
+| 对象存储 | 🟡 本地 `data/uploads/` | 无 MinIO/S3；无生命周期清理 | P2 |
+| 部署 | ⬜ 无 Dockerfile/compose；只有 eval-gate CI | 无环境分层、一键部署、健康检查编排 | P2 |
+| 观测 | 🟡 SQLite trace + loguru | 无 Prometheus/结构化指标/告警/OpenTelemetry；无运维看板 | P2 |
+| 安全 | 🟡 local/password + CORS + 上传校验 | 无 RBAC/租户/CSRF/密钥管理；默认密码弱；审计无查询界面 | P2 |
+| 可靠性 | 🟡 LLM/工具重试+熔断 | 无任务队列/幂等表/死信；PDF 切片与评测同步执行 | P2 |
+| 性能 | ⬜ 无压测/容量报告 | 无缓存层；评测并发未定义 | P2 |
+| 备份/DR | ✅ `db_backup` + 灾备测试 | 无定时备份/异地副本 | P2 |
+| 配置 | 🟡 `.env` + `config.py` | 无 secret manager/环境分层 | P2 |
+
+### 15.4 前端与接口底座
+
+| 能力 | 现状 | 缺口 | 优先级 |
+|---|---|---|---|
+| Web UI | 🟡 U1 完成（概览、AppShell、token、截图） | U2–U6 未做；5 页占位 | P0 |
+| Streamlit 直连 | 🟡 聊天历史、代码、识图仍 import 后端 | 新接口已提供，页面未接入 | P1 |
+| E2E/契约测试 | ⬜ 无 Playwright/契约测试 | CI 无前端构建；无视觉回归 | P1 |
+| 静态托管 | 🟡 `/app` 条件挂载 `web_UI/dist` | 路径是相对 CWD，换目录启动会静默跳过 | P0 |
+| 无障碍/响应式 | 🟡 U1 有基础 | U5 才系统做；无 axe/Lighthouse 门禁 | P1 |
+
+### 15.5 合规与运营底座
+
+| 能力 | 现状 | 缺口 | 优先级 |
+|---|---|---|---|
+| PII/保留期/删除 | ⬜ 未见自动化 | 上传文件无生命周期；无删除请求流程 | P2 |
+| 多用户/RBAC | ⬜ 单机单用户 | 无租户、角色、配额 | P2 |
+| 计费/配额 | ⬜ 无 | 无预算/限额/账单 | P2 |
+| 审计查询 | 🟡 写操作 trace 审计 | 无查询/导出界面 | P2 |
+
+### 15.6 优先级与排序
+
+**P0（不插队，但尽快补）**
+
+1. 修正 `web_UI/dist` 静态路径为项目根目录拼接（30 分钟）
+2. CI 从 9 个测试模块扩到全量 `unittest discover`，加 `npm run build`（半天）
+3. U2 对话优先，保持原计划
+
+**P1（U7 数据中台，U3/U4 之后插入）**
+
+1. Trace 列表 + 详情（工具、token、成本、延迟）
+2. 评测 run 历史 + 版本对比
+3. 指标趋势 + 成本汇总
+4. 数据集详情 + 样本 + 校验状态
+5. 数据质量/血缘
+6. 把 Streamlit 剩余直连改成 API
+
+**P2（U6 之后的生产化）**
+
+- Docker/compose、Postgres/MinIO、观测告警、RBAC、压测、PII/保留期、定时备份
+
+### 15.7 结论
+
+- 当前底座**不阻塞 U2–U6**；原计划继续。
+- 数据中台不是没做，而是“后端有一半、前端没入口、指标/血缘/质量接口不足”。
+- U7 数据中台放在 U3/U4 之后，预计后端 2–3 天 + 前端 3–4 天。
+- 生产化 Phase 2 放 U6 之后，避免拖慢主流程。

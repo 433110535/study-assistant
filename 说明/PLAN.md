@@ -1511,7 +1511,7 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 | 数据集目录/版本 | 🟡 `register_file/list_versions`；`/v1/datasets` 返回不可变版本与内容哈希；/ops 有 Datasets 视图 | 样本明细、版本详情、校验结果、版本对比（`/v1/eval/compare` 比的是 run，不是 dataset version） | P1 |
 | Trace 浏览 | ✅ `/v1/traces` 分页 + 状态/模型筛选，`/v1/traces/{id}` 返回 run + tool_calls；/ops Traces 瀑布流 | 导出（CSV/JSON）、按 session/user 筛选 | P1 |
 | 指标趋势 | 🟡 dashboard summary + `/v1/eval/latest`；/ops 展示单次 run 的准确率/忠实度与单条 trace 的延迟/成本 | 按天趋势、按工具/模型切片、聚合成本/延迟分布 | P1 |
-| 评测历史 | 🟡 `/v1/eval/runs` 历史列表 + `/v1/eval/compare` 版本 Diff；`get_eval_run_detail` 已有函数但未暴露 API | 单 run 详情 API、门禁历史 | P1 |
+| 评测历史 | 🟡 `/v1/eval/runs` 历史列表 + `/v1/eval/compare` 版本 Diff；`get_eval_run_detail` 已有函数但未暴露 API | 单次**评测 run** 详情 API（`GET /v1/eval/runs/{run_id}`，不是 `/v1/traces/{id}`，后者已实现）、门禁历史 | P1 |
 | 数据质量 | 🟡 `validate_and_clean_dataset` 有清洗 | PII/重复/缺失/保留期汇总与查询接口；评测里 `pii/injection` 仍是 not_checked | P1 |
 | 血缘 | ⬜ documents/chunks 有 `doc_id`，但 retrieval→answer→eval 未全链路落库 | 无法按回答反查 chunk/prompt/index 版本 | P1 |
 | 成本 | 🟡 `llm_cost` + `runs.cost_yuan` | 成本汇总、预算看板、按模型/用户切片 | P1 |

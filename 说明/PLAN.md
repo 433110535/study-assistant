@@ -5,11 +5,12 @@
 > 目标已从比赛答辩调整为可持续运行的成熟产品，本文按产品化标准维护。
 > 第 1–8 节是功能路线，第 9 节是数据中台与评测中台的产品化方案。
 > 进度标记：✅ 初步完成 · 🟡 部分完成 · ⬜ 未开始。✅ 只表示最小链路已进代码，不表示验收或产品化完成。
-> 执行本 Plan 的 Agent：先读第 10 节《Agent 执行协议》，再回到第 0 节核对现状。
+> 执行本 Plan 的 Agent：先读第 10 节《Agent 执行协议》，再回到第 0 节核对现状；Codex 接手直接读第 16 节《Codex 接手指南》。
+> 第 14 节是 2026-11-05 的历史提示词，不要原样执行。
 
 ---
 
-## 0. 进度快照（2026-11-04）
+## 0. 进度快照（2026-11-07）
 
 | 项 | 状态 | 落点 | 还没做 |
 |---|---|---|---|
@@ -151,7 +152,7 @@ get_learning_state → plan_review(SM-2) → send_message
 - 8:00 之前不跑；到点后跑一次，并把下一次醒来定在明天 8:00。
 - 配齐 SMTP 后，晨间卡片同时走邮件。缺主机、发件人或收件人时不创建发送函数。端口 465 用 SSL，其他端口先 STARTTLS。失败信息里的密码会换成 `***`。
 - `python -m backend.workers.review_reply --text 推到晚上` 只改当前到期错题的下次时间，不重置 SM-2。认不出的回复不写库。`--serve` 在 127.0.0.1 收 POST；`REVIEW_REPLY_TOKEN` 非空时要求 `X-Review-Token`。
-**还缺**：真实飞书 webhook 验收。本机入口不校验飞书签名，也不能代替飞书事件订阅。两个通道里只失败一个时，重试会把已经成功的通道再发一次。
+**还缺**：真实飞书 webhook 验收；本机入口不能代替飞书事件订阅。飞书签名校验（`X-Lark-Signature`）与 `X-Review-Token` 已实现；出站 webhook 可选 HMAC-SHA256 签名。通道级重试只重发失败通道，不会重复轰炸已成功通道。
 **价值**：最便宜地把项目从“工具”变成“代理”。
 
 ---
@@ -210,8 +211,9 @@ class ToolSpec:
 
 ### 4.2 SQLite 持久化 🟡
 
-已有：`sessions`、`messages`、`mistakes`、`runs`、`tool_calls`，评测用的 `eval_runs` / `eval_results`，以及复习发件箱 `review_outbox`。错题表已补 `ease`、`interval_days`、`repetitions`。  
-未有：`users`、`documents`、`mastery`。错题表没有 `image_path`。
+已有 14 张表：`sessions`、`messages`、`mistakes`、`runs`、`tool_calls`、`users`、`documents`、`mastery`、`eval_runs`、`eval_results`、`review_outbox`、`web_sessions`、`dataset_versions`、`code_attempts`。错题表已补 `ease`、`interval_days`、`repetitions`。
+
+仍未做：错题表没有 `image_path`（拍照批改不持久化原图路径）；生产备份/恢复演练未做。
 
 最小表集：
 
@@ -228,9 +230,9 @@ tool_calls(id, run_id, tool_name, args_json, result_preview, status, latency_ms)
 
 ### 4.3 服务拆分 🟡
 
-- FastAPI：`python -m backend.api` 只绑 `127.0.0.1:8000`。已有 `/health`、`/v1/tools`、`/v1/traces/{trace_id}`、`/v1/datasets`、`/v1/eval/latest`、`/v1/mistakes`、确认、丢弃、记回忆、改期、`/v1/review/due`、`/v1/review/cards`、`/v1/review/outbox`、`/v1/review/plan`、`POST /v1/chat/stream`。流式接口把 `react_stream` 的事件写成 SSE。`STUDY_API_KEY` 非空时，`/v1` 要求请求头 `X-API-Key`。页面上的「保存卡片」不外发。
-- Streamlit：失败归因页请求 `/v1/eval/latest`。错题列表、确认、丢弃、到期队列、记回忆、改期、保存卡片和发件箱都走上述接口。问答发送请求 `/v1/chat/stream`，并传入页面上的同一个 Agent，所以 RAG 开关仍然有效。知识讲解请求 `POST /v1/explain`。概念对比请求 `POST /v1/compare`。习题出题请求 `POST /v1/questions`。学习计划请求 `POST /v1/plans`。日程请求 `POST /v1/schedules`。整卷判分请求 `POST /v1/papers/grade`。单题对照请求 `POST /v1/items/grade`，记入错题本请求 `POST /v1/mistakes`。知识库页仍直接调用函数。
-- Worker：复习调度在页面外，不在 Streamlit 进程里。
+- FastAPI：`python -m backend.api` 只绑 `127.0.0.1:8000`，提供 `/health`、`/v1/auth/*`、`/v1/sessions*`、`/v1/chat/stream`（SSE）、`/v1/vision/ocr`、`/v1/code/*`、`/v1/dashboard/summary`、`/v1/tools`、`/v1/traces`、`/v1/traces/{id}`、`/v1/datasets`、`/v1/eval/latest`、`/v1/eval/runs`、`/v1/eval/compare`、`/v1/mistakes*`、`/v1/review/*`、`/v1/explain`、`/v1/compare`、`/v1/questions`、`/v1/plans`、`/v1/schedules`、`/v1/papers/grade`、`/v1/quiz/grade`、`/v1/items/grade`、`/v1/documents*`、`/v1/mastery`、`/v1/database/*`，以及 `/app` SPA 静态托管。`STUDY_API_KEY` 非空时，`/v1` 要求 `X-API-Key`；`AUTH_MODE=password` 时同时接受 Cookie。页面上的「保存卡片」不外发。
+- Streamlit（Legacy）：会话、OCR、习题批改、知识库列表/检索/RAG 问答、讲解、对比、出题、计划、日程、整卷/单题判分、错题与复习都已走 `local_client`。**唯一仍未接入的是代码助教页**（直接 import `code_sandbox` / `code_attempt_store`）。问答仍把页面上的同一个 Agent 传给 `/v1/chat/stream`，所以 RAG 开关有效。
+- Worker：复习调度在页面外（`python -m backend.workers.review_scheduler`），不在 Streamlit 进程里。
 - 备份：`copy_database` 用 SQLite backup 复制本机库，再覆盖回去。测试会先多写一条再恢复，确认多写的那条消失。不是 Postgres，也没有做过生产恢复演练。
 
 ### 4.4 反向暴露 ⬜
@@ -242,7 +244,7 @@ tool_calls(id, run_id, tool_name, args_json, result_preview, status, latency_ms)
 
 30 条固定问题集，统计：工具选择准确率、答案忠实度（是否引用了检索内容）、平均迭代轮数。
 
-当前默认集是 100 条 `qa_baseline_v5`（v1–v4 快照保留）。离线运行会把该文件的 SHA-256 登记进 `dataset_versions`，同一版本号不能换内容。前 56 条与 v4 相同，后 44 条按工具缺口补上，已注册工具都至少出现一次。`--dry-run` 不调用模型：100 条都打工具选择；其中 16 条预期调用 `rag_search` 的题用写死的片段和参考回答打忠实度，其余题记为不适用，不按 0 分计入平均。平均低于 0.85，或较传入基线下跌超过 3 个百分点，门禁失败。忠实度由 `score_faithfulness` 计算：去掉空白后，不少于 4 个字的句子必须原样出现在检索片段里。`--live` 仍打工具选择；若这次调用了 `rag_search`，再用当次检索正文给忠实度，没有正文的回答按空上下文记，没检索的题不记分。注入、成本和迭代轮数还不在门禁里。`.github/workflows/eval-gate.yml` 会跑离线测试和 `--dry-run`。
+当前默认集是 100 条 `qa_baseline_v5`（v1–v4 快照保留）。离线运行会把该文件的 SHA-256 登记进 `dataset_versions`，同一版本号不能换内容。前 56 条与 v4 相同，后 44 条按工具缺口补上，已注册工具都至少出现一次。`--dry-run` 不调用模型：100 条都打工具选择；其中 16 条预期调用 `rag_search` 的题用写死的片段和参考回答打忠实度，其余题记为不适用，不按 0 分计入平均。平均低于 0.85，或较传入基线下跌超过 3 个百分点，门禁失败。忠实度由 `score_faithfulness` 计算：去掉空白后，不少于 4 个字的句子必须原样出现在检索片段里。`--live` 仍打工具选择；若这次调用了 `rag_search`，再用当次检索正文给忠实度，没有正文的回答按空上下文记，没检索的题不记分。注入、成本和迭代轮数还不在门禁里。`.github/workflows/eval-gate.yml` 现在会先 `npm ci && npm run build`，再跑全量 239 项单测和 `--dry-run`；远程 Actions 结果尚未核对。
 
 ---
 
@@ -402,10 +404,10 @@ def read_image(image_path: str, focus: str = "全部") -> str:
 **最小可信版本**（先做这五样，别先做看板）：
 
 1. ✅ 一张 trace 表（`runs` + `tool_calls`）
-2. 🟡 一个评测集（默认 `qa_baseline_v5`，100 条；v1–v4 保留。16 条检索题有固定片段）
-3. 🟡 一个离线 runner（工具选择；dry-run 用固定片段打忠实度，live 用当次检索正文）
-4. 🟡 一条发布门禁（只拦工具选择准确率，未进 CI）
-5. 🟡 一个失败归因看板（页面展示缺失工具、检索为空、答案不忠实、超时；成本只在设置了 `EVAL_MAX_COST_YUAN` 且本次更高时计入）
+2. ✅ 一个评测集（默认 `qa_baseline_v5`，100 条；v1–v4 保留。16 条检索题有固定片段；`dataset_versions` 登记哈希）
+3. ✅ 一个离线 runner（工具选择；dry-run 用固定片段打忠实度，live 用当次检索正文）
+4. 🟡 一条发布门禁（已进 `.github/workflows/eval-gate.yml`，但仍只拦工具选择/传入的忠实度，未覆盖注入/成本/迭代）
+5. ✅ 一个失败归因看板（Streamlit 失败归因页 + `/ops`；成本只在设置了 `EVAL_MAX_COST_YUAN` 且本次更高时计入）
 
 ### 9.2 五种产品方向，底座只建一套
 
@@ -608,7 +610,7 @@ GET  /v1/documents            文档与索引版本
 
 门禁接入 CI 与发布脚本；失败自动保留现场（trace、输出、配置），支持一键回滚。
 
-当前 `.github/workflows/eval-gate.yml` 会在 push 和 pull request 上跑离线测试与 `--dry-run`。2026-11-04 最新一次 `offline-gate` 在没有 API Key 时停在习题页整卷控件，失败原因已修，本机同一组命令已通过。这次推送后的远程结果还没看到。忠实度只在调用方传入分数时进入门禁；没校准的模型裁判仍然不拦截发布。
+当前 `.github/workflows/eval-gate.yml` 在 push 和 pull request 上先构建前端，再跑全量 239 项单测与 `--dry-run`。本机同一组命令已通过（2026-11-07），远程 Actions 结果尚未核对。忠实度只在调用方传入分数时进入门禁；没校准的模型裁判仍然不拦截发布。
 
 #### 9.4.6 可复现
 
@@ -646,8 +648,8 @@ GET  /v1/documents            文档与索引版本
 | 周 | 平台线 | 功能线 | 退出条件 | 状态 |
 |---|---|---|---|---|
 | 1 | C：trace + runner + 50 条 | Phase 0 工具注册表 | 100% run 可追溯；基线报告 | 🟡 默认评测 100 条。每次运行有 `trace_id`，并按模型用量记 token 和费用。live 只在调用了检索时按当次正文打忠实度。费用不含缓存和 Batch |
-| 2 | A：表结构 + 数据集版本 + 门禁 | Phase 1 代码助教 | 故意降级被门禁拦截 | 🟡 代码助教最小链路已进代码，子进程有 64MB 内存上限；工具选择和传入的忠实度可被 `check_release_gate` 拦截。缺数据集表和容器沙箱。CI 工作流已提交。offline-gate 失败原因已修，本机已通过；这次推送后的远程结果还没看到 |
-| 3–4 | B：FastAPI + Postgres + MinIO | Phase 2 拍照批改 | UI 走 API；备份可恢复 | 🟡 失败归因、错题页、问答、讲解、对比、出题、单题对照、整卷判分、学习计划和日程已走 API。知识库页仍直连。Postgres / MinIO / 生产演练未做 |
+| 2 | A：表结构 + 数据集版本 + 门禁 | Phase 1 代码助教 | 故意降级被门禁拦截 | 🟡 代码助教最小链路已进代码，子进程有 64MB 内存上限；工具选择和传入的忠实度可被 `check_release_gate` 拦截；`dataset_versions` 已落库。缺容器沙箱；CI 已跑全量 239 单测 + 前端 build，远程 Actions 待核对 |
+| 3–4 | B：FastAPI + Postgres + MinIO | Phase 2 拍照批改 | UI 走 API；备份可恢复 | 🟡 失败归因、错题页、问答、讲解、对比、出题、单题对照、整卷判分、学习计划、日程和知识库已走 API；代码助教（Streamlit）仍直连。Postgres / MinIO / 生产演练未做 |
 | 5 | 在线抽样 + judge 校准 | Phase 2 收尾 | kappa ≥ 0.6 | ⬜ |
 | 6 | RBAC + 保留期 + 成本核算 | Phase 3 主动推送 | 安全清单通过 | 🟡 复习脚本和每日调度已进代码；RBAC、保留期和安全清单未做 |
 | 7–8 | 压测 + 监控 + 演练 | 方向扩展 | 100 并发；RTO 演练通过 | ⬜ |
@@ -806,11 +808,13 @@ GET  /v1/documents            文档与索引版本
 
 - 工作目录：`F:\python_ai\智能体_local`
 - Python：`venv\Scripts\python.exe`，不要用系统 Python
-- 启动：`venv\Scripts\python.exe -m streamlit run frontend/app.py`
+- 启动（主入口）：`venv\Scripts\python.exe -m backend.api`，访问 `http://127.0.0.1:8000/app`
+- 启动（Legacy）：`venv\Scripts\python.exe -m streamlit run frontend/app.py`
+- 前端：`cd web_UI; npm ci; npm run build`（或 `npm run dev` 起 5173）
 
 **测试与验收**
 
-- 单元测试：`venv\Scripts\python.exe -m unittest discover -s tests -v`
+- 单元测试：`venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v`（当前 239 项）
 - 语法检查：`venv\Scripts\python.exe -m compileall -q backend frontend tests`
 - 评测入口先读 `--help`，不要凭记忆拼参数；当前入口在 `backend/platform/eval_runner.py`
 - 每个模块必须给出可复现的命令与输出；没有测试的功能不算完成
@@ -866,10 +870,10 @@ GET  /v1/documents            文档与索引版本
 | M4 | 拍照识题 + 整卷拆题/批改 | M2 | 拆题结果可校对；`ungraded` 不计分；真实试卷走通 | ✅ 增强模式支持多选、多空、单位换算等效；整卷批改通过 API 自动诊断、入错题库并更新掌握度；test_m4_paper_e2e 全流程通过 |
 | M5 | 主动复习推送 | M2 | dry-run 可用；真实推送；可改期；有常驻调度 | ✅ 8:00 常驻调度；outbox 通道状态落盘与只重发失败通道（解决重复轰炸）；支持飞书可选 HMAC-SHA256 签名与回调校验；test_m5_dual_channel 验证通过 |
 | M6 | 数据中台 A | M1、M2 | 数据集版本、发布门禁、失败归因看板 | ✅ validate_and_clean_dataset 自检清洗；eval_runner 支持 max_cost_yuan 预算硬熔断；失败归因看板完整捕获工具缺失/空检索/不忠实/超时/超成本 |
-| M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 API 缺口 F1–F8 全量落地；独立 Web UI（ClickHouse 极黑霓虹规范 React + Vite）U1–U6 核心闭环与 U7 中台看板（/ops）代码落地；FastAPI /app 绝对路径静态挂载与 SPA 路由 Fallback 闭环；全量 239 项后端单元测试与前端构建全部绿灯。还差：Legacy Streamlit 代码助教仍页面内直连 `code_sandbox` / `code_attempt_store`；Playwright E2E 与浏览器视觉走查未做 |
+| M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 API 缺口 F1–F8 全量落地；独立 Web UI（ClickHouse 极黑霓虹规范 React + Vite）U1–U7 核心闭环与中台看板（/ops）代码落地；FastAPI /app 绝对路径静态挂载与 SPA 路由 Fallback 闭环；全量 239 项后端单元测试与前端构建全部绿灯。还差：Legacy Streamlit 代码助教仍页面内直连 `code_sandbox` / `code_attempt_store`；Playwright E2E 与浏览器视觉走查未做 |
 
 > 第 3.4–3.6 节（口语陪练 / 联网调研 / 苏格拉底双 Agent）是 P2 可选项，不计入本轮完成条件；确需实现时另立 M8–M10，并在开始前确认优先级与外部 API。
-> Web UI 前端任务见 13.7（U1–U6），同样不计入 M0–M7 的完成条件。
+> Web UI 前端任务见 13.7（U1–U7），同样不计入 M0–M7 的完成条件。
 
 ### 10.7 结束前的自检
 
@@ -887,8 +891,8 @@ GET  /v1/documents            文档与索引版本
 
 ## 11. 前端独立化与 API 缺口（2026-11-05）
 
-> 本节是 M7 的未完成子项。现有 Streamlit 前端可运行，但要换独立 Web UI，必须把“进程内 import”改成“HTTP 契约”。
-> `web_UI` 目录尚未在仓库、`F:\python_ai`、`F:\UI` 中找到；路径确认后再决定前端框架。下面的接口缺口与框架选型无关。
+> 本节是 M7 的未完成子项（2026-11-05 记录）。`web_UI` 已落地为 React + Vite 独立前端；当前状态见第 0、13、15、16 节。
+> 保留本节是为了对照“哪些页面已从进程内 import 改为 HTTP 契约”。
 
 ### 11.1 已经走 API 的能力
 
@@ -945,7 +949,7 @@ GET  /v1/documents            文档与索引版本
 - [ ] 401/403/422/500 有统一错误处理，不白屏（未逐项走查）
 - [ ] 上传有类型/大小/进度/失败重试（未逐项走查）
 - [ ] 关掉 Streamlit 后，核心页面仍可用（`test_spa_mount` 只覆盖静态挂载；浏览器核心链路未走查）
-- [x] 现有 180 个后端测试保持通过；新增接口有对应测试（总计 239 个测试全绿，严格覆盖跨用户隔离、空密防御、二进制扩展名伪装拦截与会话物理 purge）
+- [x] 既有后端测试保持通过；新增接口有对应测试（总计 239 个测试全绿，严格覆盖跨用户隔离、空密防御、二进制扩展名伪装拦截与会话物理 purge）
 
 ### 11.5 推进顺序
 
@@ -966,7 +970,7 @@ GET  /v1/documents            文档与索引版本
 
 ## 12. Web UI API 缺口实施规格（交给执行 Agent）
 
-> 本节是第 11 节的可执行版本。把本节交给编码 Agent，即可按 F1–F8 补齐接口。
+> 2026-11-05 的规格，F1–F8 已完成；保留用于补接口时对照，不要从头再做一遍。当前状态见 11.3、15、16 节。
 > 目标不是重写前端，而是让独立 Web UI 只靠 HTTP 完成“登录 → 会话 → 对话 → 识图 → 代码助教 → 看板”的核心链路。
 
 ### 12.1 角色与工作目录
@@ -989,10 +993,10 @@ GET  /v1/documents            文档与索引版本
 7. `tests/test_api.py`、`tests/test_grading.py`（测试风格）
 8. `frontend/app.py` 的 `render_qa` / `render_quiz` / `render_code_tutor` / `render_mistakes`
 
-先跑基线，确认 180 个测试通过再动手：
+先跑基线，确认 239 个测试通过再动手：
 
 ```powershell
-venv\Scripts\python.exe -m unittest discover -s tests -v
+venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 venv\Scripts\python.exe -m compileall -q backend frontend tests
 ```
 
@@ -1074,7 +1078,7 @@ venv\Scripts\python.exe -m compileall -q backend frontend tests
 
 ### 12.12 验收
 
-- 新增接口都有测试；`unittest discover` 全绿（180+ 新增）。
+- 新增接口都有测试；`unittest discover` 全绿（当前 239 项）。
 - 现有 Streamlit 行为不变；`local_client` 仍可用。
 - 前端可以只靠 HTTP 完成：登录态 → 会话列表 → 对话 → 图片 OCR → 代码运行/提示 → 看板。
 - 11.3 的 F1–F8 状态更新；M7 仍为 🟡，直到页面接入且 E2E 通过。
@@ -1155,7 +1159,7 @@ ClickHouse 是营销站语言：纯黑、霓虹、96px 巨字。学习工作台�
 - 不用渐变、玻璃拟态、彩色阴影
 - 全站深色；浅色模式放 v2
 
-### 13.2 信息架构（第一版 6 页）
+### 13.2 信息架构（第一版 6 页 + U7 `/ops`）
 
 | 路由 | 页面 | 核心内容 |
 |---|---|---|
@@ -1165,8 +1169,9 @@ ClickHouse 是营销站语言：纯黑、霓虹、96px 巨字。学习工作台�
 | `/review` | 错题与复习 | 到期卡片、错题表、改期 |
 | `/knowledge` | 知识库 | 文档表、上传、检索、RAG 问答 |
 | `/code` | 代码助教 | 编辑器、运行输出、分级提示、历史 |
+| `/ops` | 评测与可观测 | Traces 列表/瀑布流、eval run 历史/对比、数据集版本 |
 
-Phase 2 再加：`/plan`（计划）、`/ops`（评测/备份）、`/login`（仅 password 模式）。
+仍未做：`/plan`（计划）、`/login`（仅 password 模式）。
 
 ### 13.3 页面要点
 
@@ -1217,6 +1222,8 @@ Phase 2 再加：`/plan`（计划）、`/ops`（评测/备份）、`/login`（�
 
 ### 13.4 技术栈与工程结构
 
+> 下面是立项时的目标栈；**当前仓库实际落地的栈见 13.4.1**。两者不同时，以 13.4.1 为准，不要按目标栈重写已有页面。
+
 - React 18 + Vite + TypeScript
 - Tailwind + CSS variables；Radix UI primitives 自建组件
 - TanStack Query（服务端状态）+ Zustand（UI 状态）
@@ -1225,6 +1232,20 @@ Phase 2 再加：`/plan`（计划）、`/ops`（评测/备份）、`/login`（�
 - react-markdown + remark-gfm + remark-math + rehype-katex + Shiki
 - Recharts，自定义深色主题
 - Zod、Vitest + RTL + Playwright + axe
+
+#### 13.4.1 当前实际技术栈（2026-11-07）
+
+- React 19 + Vite 8 + TypeScript 7 + Tailwind 3；状态用 React `useState`/`useEffect`，没有 Zustand。
+- 路由是 `App.tsx` 里的路径状态 + `history.pushState`，**没有使用 `react-router-dom`**（依赖虽在，代码未引用）。
+- Radix 只用了 `@radix-ui/react-dialog`；其余为原生元素 + Tailwind。
+- 服务端状态用 TanStack Query；图标用 lucide-react；lint 用 oxlint。
+- **没有** Monaco/CodeMirror（代码页是带行号的 `<textarea>`）、Markdown/KaTeX/Shiki、Recharts（概览用自绘 SVG/条形）、Zod、Vitest/RTL/Playwright。
+- `web_UI/scripts/capture.js` 用 `puppeteer-core` 截图，硬编码 Windows Chrome 路径和 `127.0.0.1:5173`，只截概览页。
+- 类型在 `web_UI/src/types/*.ts` 手写，**没有**用 `openapi-typescript` 生成。
+- 目录是 `src/pages` + `src/components`，不是目标结构里的 `src/app` + `src/features`。
+- `web_UI/README.md` 仍是 Vite 模板，启动说明以根 README 和 16.1 为准。
+
+下面是**目标结构**，当前实际是 `src/pages` + `src/components`：
 
 ```text
 web_UI/
@@ -1241,7 +1262,7 @@ web_UI/
 
 ### 13.5 API 对接
 
-- 用 `openapi-typescript` 从 `/openapi.json` 生成类型
+- 目标是用 `openapi-typescript` 从 `/openapi.json` 生成类型；当前是手写类型（见 13.4.1），改造时先补生成脚本再逐步替换
 - 所有请求 `credentials: 'include'`；401 统一处理
 - SSE 用 `fetch` + `ReadableStream`（不是 EventSource），支持中断与重连
 - 图片/PDF 走 multipart；图片前端压缩到长边 1600、2MB 内
@@ -1268,7 +1289,7 @@ web_UI/
 | TraceDrawer | 工具名、参数、结果、耗时，按事件流追加 |
 | ChartCard | 无渐变、网格 `#414141` 40%、主线霓虹 |
 
-### 13.7 实施阶段（U1–U6）
+### 13.7 实施阶段（U1–U7）
 
 | ID | 周 | 交付 | 验收 |
 |---|---|---|---|
@@ -1278,10 +1299,11 @@ web_UI/
 | U4 | 4 | 错题与复习 + 知识库 | 到期/改期闭环；上传/检索/RAG 可用 |
 | U5 | 5 | 代码助教 + 响应式 + 可访问性 | 运行/提示/历史；1440/1024/390 无横向滚动 |
 | U6 | 6 | E2E、性能、静态构建、切换 | `npm run build` 成功；`/app` 可访问；关闭 Streamlit 核心链路可用 |
+| U7 | 7 | `/ops`：Traces、eval run 历史/对比、数据集版本 | 分页/筛选/详情/对比可用；构建与单测通过 |
 
 ### 13.8 验收标准
 
-- [x] 6 个页面全部只走 HTTP，前端零 `backend` import
+- [x] 7 个页面全部只走 HTTP，前端零 `backend` import
 - [x] 单机 local 模式直接进入，不强制登录
 - [ ] 对话 SSE 首 token < 2s（本机）；中断/重连/错误有 UI 反馈（实现完成，未做首 token 计时）
 - [x] 图片上传 → OCR → 可编辑 → 发送，链路完整
@@ -1308,14 +1330,15 @@ web_UI/
 2. 全站纯黑长时间学习可能疲劳，浅色模式放 v2
 3. Basier 有授权风险，统一用 Inter
 4. Streamlit 的 Plane 与 Web UI 的 ClickHouse 并存，迁移期不要互相改样式
-5. `web_UI/dist` 的静态挂载路径要改成项目根目录拼接
+5. `web_UI/dist` 静态挂载已改为项目根绝对路径 + `WEB_UI_DIST` 覆盖；改启动方式时不要退回相对 CWD
 
 **Phase 2**
 
-- `/plan` 计划页、`/ops` 评测与备份页
+- `/plan` 计划页、`/login` 登录页
 - 浅色模式
 - 多用户 / RBAC / Postgres / MinIO
 - 容器化代码沙箱与部署
+- `web_UI` 引入 Monaco/CodeMirror、Markdown/KaTeX、图表库与 Playwright（当前均未引入）
 
 ### 13.11 状态
 
@@ -1327,18 +1350,19 @@ web_UI/
 | U4 | 错题复习 + 知识库 | ✅ |
 | U5 | 代码助教 + 响应式 + 可访问性 | ✅ |
 | U6 | E2E + 构建 + 切换 | 🟡 |
+| U7 | 评测与可观测 `/ops` | 🟡 |
 
-> `npm run build`、`/app` 静态挂载与关闭 Streamlit 后的核心 HTTP 链路已验收；Playwright E2E、Lighthouse 性能与 U2–U5 真实浏览器视觉走查仍未做。
+> `npm run build`、`/app` 静态挂载与关闭 Streamlit 后的核心 HTTP 链路已验收；Playwright E2E、Lighthouse 性能与 U2–U5、`/ops` 真实浏览器视觉走查仍未做。
 > ✅ 只表示代码完成，不表示验收完成。
 
 > 交给 Antigravity 的执行提示词见第 14 节。
 
 ---
 
-## 14. Antigravity 执行提示词（Web UI）
+## 14. Antigravity 执行提示词（Web UI，历史）
 
-> 2026-11-05 追加。配合第 13 节使用。
-> 14.1 是完整版，直接整段交给 Antigravity；14.2 是简洁版，任务窗口有限时按阶段使用。
+> 2026-11-05 追加，保留用于追溯，**不要再原样交给 Agent 执行**。其中的 React 18、Zustand、React Router、6 页和技术栈已被实际实现替代；当前状态与真实栈见第 0、13.4.1、16 节。
+> 14.1 是当时的完整版；14.2 是简洁版。
 
 ### 14.1 完整版
 
@@ -1531,7 +1555,7 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 
 | 能力 | 现状 | 缺口 | 优先级 |
 |---|---|---|---|
-| 持久化 | 🟡 SQLite 单机；11 张业务表；`db_backup` | 无 Postgres/迁移框架/连接池；多用户并发有限 | P2 |
+| 持久化 | 🟡 SQLite 单机；14 张表（含 auth/eval/code_attempts）；`db_backup` | 无 Postgres/迁移框架/连接池；多用户并发有限 | P2 |
 | 对象存储 | 🟡 本地 `data/uploads/` | 无 MinIO/S3；无生命周期清理 | P2 |
 | 部署 | ⬜ 无 Dockerfile/compose；只有 eval-gate CI | 无环境分层、一键部署、健康检查编排 | P2 |
 | 观测 | 🟡 SQLite trace + loguru | 无 Prometheus/结构化指标/告警/OpenTelemetry；无运维看板 | P2 |
@@ -1550,6 +1574,7 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 | E2E/契约测试 | ⬜ 无 Playwright/浏览器 E2E | CI 已有全量单测与前端 build；无视觉回归/axe | P1 |
 | 静态托管 | ✅ `/app` 绝对路径挂载 + SPA fallback + 静态资源 404 隔离 + 防路径穿越 + 缺失 503；`dist_dir` 可注入 | 无 | — |
 | 无障碍/响应式 | ✅ U1–U5 落地（1440/1024/390 适配无溢出，快捷键与 ARIA） | 无 axe/Lighthouse 自动化 CI 门禁 | P1 |
+| 前端功能深度 | 🟡 代码页是带行号 textarea；概览图表自绘；无 Markdown/KaTeX/Shiki；无前端单测 | Monaco/CodeMirror、Markdown 渲染、图表库、Vitest/RTL/Playwright | P1 |
 
 ### 15.5 合规与运营底座
 
@@ -1576,7 +1601,7 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 4. 数据集详情 + 样本 + 校验状态：🟡 `/v1/datasets` 与 Datasets 视图已展示不可变版本、样本数与哈希；样本明细、版本详情与校验结果 API 未做
 5. 把 Streamlit 剩余直连改成 API：🟡 会话、OCR、习题批改已收口至 `local_client`；代码助教仍直接 import `code_sandbox` / `code_attempt_store`
 
-**P2（U6 之后的生产化）**
+**P2（生产化）**
 
 - Docker/compose、Postgres/MinIO、观测告警、RBAC、压测、PII/保留期、定时备份
 
@@ -1586,3 +1611,136 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 - 数据中台不是没做，而是“后端有一半、前端没入口、指标/血缘/质量接口不足”。
 - U7 数据中台已落地 Trace 列表/详情、eval run 历史/对比、/ops 看板与数据集版本视图；样本明细、指标趋势、聚合成本与血缘仍是缺口。
 - 生产化 Phase 2 放 U6 之后，避免拖慢主流程。
+
+---
+
+## 16. Codex 接手指南（2026-11-07）
+
+> 先读第 10 节（执行协议）和第 0 节（当前状态），再读本节。第 14 节是历史提示词，不要原样执行。
+> 本节只记录“现在动手必须知道的事”；功能规格仍以第 3、9、11、13、15 节为准。
+
+### 16.1 开工前先跑基线
+
+工作目录固定为项目根目录，PowerShell 示例：
+
+```powershell
+cd F:\python_ai\智能体_local
+
+# 1) 语法检查
+venv\Scripts\python.exe -m compileall -q backend frontend tests
+
+# 2) 全量后端单测（当前 239 项，约 30 秒）
+venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+
+# 3) 离线评测门禁（当前 100/100，忠实度 100%）
+venv\Scripts\python.exe -m backend.platform.eval_runner --dry-run
+
+# 4) 前端构建与 lint
+cd web_UI
+npm ci
+npm run build          # tsc -b && vite build，产物在 web_UI/dist
+npm run lint           # 当前 0 error，5 个已知 set-state-in-effect warning
+```
+
+预期：单测 `Ran 239 tests ... OK`，`--dry-run` 输出 `工具选择 100/100，忠实度 100.00%`，`npm run build` 成功。任何一项失败都先修，不要带着红色基线继续加功能。
+
+启动方式：
+
+```powershell
+# 主入口：FastAPI + React 静态托管（需要先 npm run build）
+venv\Scripts\python.exe -m backend.api
+# 打开 http://127.0.0.1:8000/app 和 http://127.0.0.1:8000/app/ops
+
+# 前端开发模式（Vite 5173，代理 /v1 -> 8000）
+cd web_UI
+npm run dev
+
+# Legacy Streamlit（8501），不是当前主界面
+venv\Scripts\python.exe -m streamlit run frontend/app.py
+```
+
+注意：`start.py` / `start.bat` / `start_online.bat` 仍只启动 Streamlit，属于 Legacy；不要把它们当成新 UI 的启动入口。
+
+### 16.2 环境、路径与配置
+
+- Windows + Python 3.11.9，解释器用 `venv\Scripts\python.exe`；`venv_broken_py312` 是损坏目录，不要使用。
+- Node 20+（CI 用 20，本机 24）；前端依赖不入库，先 `npm ci`。
+- 项目根：`F:\python_ai\智能体_local`。数据：`data/app.db`、`data/uploads/`、`data/faiss_index/`；日志：`logs/`。
+- `.env` 只在本机，**不要读取、打印或提交**；示例见 `.env.example`。`.env.example` 里的默认密码 `study2026` 是弱密码，切 `AUTH_MODE=password` 前必须改。
+- 默认 `AUTH_MODE=local`，单用户 `student`，不需要登录页；`STUDY_API_KEY` 为空时 `/v1` 不校验。服务只绑 `127.0.0.1`，不要改成公网监听。
+- Vite dev 固定 `127.0.0.1:5173`（`strictPort`）；换端口要同步 `CORS_ORIGINS`。生产构建的 `base` 是 `/app/`，换挂载路径要同时改 `vite.config.ts` 和 FastAPI 托管。
+- `/app` 静态目录解析顺序：`create_app(dist_dir=...)` > `WEB_UI_DIST` 环境变量 > 项目根 `web_UI/dist`。`dist` 缺失时 `/app` 返回 503，这是预期行为。
+- 当前没有数据库迁移框架；新增表/列沿用 `CREATE TABLE IF NOT EXISTS` + 兼容旧库的 `ALTER TABLE` 检查，不要手改线上库。
+- 运维入口：复习调度 `venv\Scripts\python.exe -m backend.workers.review_scheduler`（每天北京时间 8:00），单次补跑 `python -m backend.workers.review_push`，改期 `python -m backend.workers.review_reply --text 推到晚上`。
+- 评测：`--dry-run` 也会写一条 `eval_runs` 并登记数据集哈希；`--live` 会真实调用模型并产生费用，先加 `--limit` 小样本验证。
+
+### 16.3 当前实际技术栈（与 13.4 目标栈不同）
+
+- 后端：Python 3.11、FastAPI、SQLite、FAISS、LangChain 1.x core/openai、DashScope、Streamlit（Legacy）。
+- 前端：React 19、Vite 8、TypeScript 7、Tailwind 3、TanStack Query、Radix Dialog、lucide-react、oxlint。
+- **没有** Zustand、React Router（`App.tsx` 自己处理路径和 `pushState`）、Monaco/CodeMirror、Markdown/KaTeX/Shiki、Recharts、Zod、Vitest/RTL/Playwright。
+- 代码编辑器是带行号的 `<textarea>`；图表是手绘；类型手写在 `web_UI/src/types`，没有用 `openapi-typescript`。
+- 截图脚本 `web_UI/scripts/capture.js` 使用 `puppeteer-core`，硬编码 Chrome 路径，只截概览页三个宽度；它不是 E2E。
+- 页面共 7 个：`/`、`/chat`、`/practice`、`/review`、`/knowledge`、`/code`、`/ops`。前端没有 login 页。
+- `web_UI/README.md` 仍是 Vite 模板，不要把它当项目说明。
+
+### 16.4 红线
+
+1. **不要弱化测试**：不跳过、不删除、不改断言来“让门禁通过”。测试失败先修代码。
+2. **不要提交** `.env`、`venv/`、`data/app.db`、`data/uploads/`、`logs/`、`web_UI/dist`、`node_modules/`、`__pycache__/`。
+3. 代码沙箱是**进程隔离，不是容器**；不要暴露公网，不要移除超时/内存/导入白名单/审计钩子。当前上限 64MB、最长 5 秒。
+4. 写操作（发消息、改期、写错题本等）必须保留用户确认；没有 API Key 时返回明确错误，不编造结果。
+5. 不引入多租户/RBAC/Postgres 等大改造，除非先更新 PLAN 并确认优先级。
+6. 不改写已推送的 git 历史，不 force push；提交前先 `git pull`/确认工作区干净。
+7. 完成后同步更新第 0 节、第 15 节、第 16.6 节与 README，再按 `feat(scope): ...` / `fix(scope): ...` 提交。
+
+### 16.5 已知坑与风险
+
+- **远程 CI 未核对**：本机全绿不等于 Actions 全绿；改完先看 GitHub Actions。
+- `tests/test_spa_mount.py` 的部分用例在 `web_UI/dist` 缺失时会 `skipTest`；本地先 `npm run build`，否则会误以为覆盖了静态托管。
+- `test_spa_mount` 用默认 `create_app()`；新增涉及数据库的测试必须传临时 `db_path`，不要污染 `data/app.db`。
+- 2026-11-07 本地全量测试出现过一次不可复现的首次退出（无失败摘要），随后连续两轮 239 全绿；若 CI 复现，优先查测试隔离和 SQLite 文件锁。
+- `npm run lint` 有 5 个已知 `react(set-state-in-effect)` warning（MasteryRadarTab、KnowledgeQaTab、ChatPage、MistakeRegistryTab、DueReviewDeckTab）；不要用全局禁用规则“修复”。
+- 代码沙箱在 Windows 用 Job Object，在 Linux 用 `resource`；CI 是 Ubuntu，Windows 特有问题要在本机验证。
+- 拍照批改还没有真实试卷人工验收；`mistakes` 表没有 `image_path`，上传原图路径不会持久化。
+- 真实飞书 webhook / SMTP 未验收；本机回复入口不能替代飞书事件订阅。
+- SSE 首 token 计时、断线重连、错误 UI 未验收；`/ops` 与 U2–U5 未做真实浏览器视觉走查。
+- `/app` 下不存在的静态资源会严格 404（不回退 index.html），这是防路径穿越的设计；新增资源路径时不要改成“所有 404 都回 HTML”。
+- `frontend/app.py` 仍直接 import 代码沙箱和 `code_attempt_store`；不要因为“看起来收口了”就删掉兼容路径。
+- `web_UI` 没有前端测试；`npm run build` 通过只代表类型和打包通过，不代表交互正确。
+
+### 16.6 待办优先级
+
+**P0（先做，直接影响可交付）**
+
+1. 核对并修复 GitHub Actions：全量单测 + 前端 build 必须在远程通过。
+2. 加 Playwright 冒烟 E2E：打开 `/app`，走 7 个路由，覆盖对话 SSE、图片 OCR、判分、错题确认/改期、代码运行、`/ops` 列表与详情；没有真实 Key 时用 mock 或明确跳过外部调用。
+3. U2–U5 与 `/ops` 的 1440/1024/390 截图验收，补进 `web_UI/screenshots` 与 PLAN。
+4. 把 Streamlit 代码助教接入 `/v1/code/*`；若页面仍要显示异常类型/行号，先扩展 API 响应该字段并补测试。
+
+**P1（产品化与可观测）**
+
+5. 增加 `GET /v1/eval/runs/{run_id}`，复用现有 `get_eval_run_detail`，补 200/404 测试。
+6. 数据集详情/样本/校验结果 API 与前端视图；dataset version 对比（区别于 `/v1/eval/compare` 的 run 对比）。
+7. 指标趋势与聚合成本：按天、按模型/工具切片，成本/延迟汇总。
+8. SSE 首 token 计时、断线重连、错误态；Lighthouse/axe/键盘走查。
+9. 重写 `web_UI/README.md`，补实际技术栈、启动命令、已知缺口；逐步引入 `openapi-typescript`。
+10. `mistakes.image_path` 与拍照上传路径持久化。
+
+**P2（生产化）**
+
+11. 容器化代码沙箱；Docker/compose、Postgres/MinIO、连接池与迁移框架。
+12. RBAC、租户、CSRF、密钥管理、PII 脱敏、保留期、删除请求流程。
+13. 定时备份/异地副本/恢复演练；Prometheus/告警/OpenTelemetry。
+14. 真实飞书/SMTP 验收、真实试卷人工验收、线上抽样/影子评测。
+
+### 16.7 完成定义与汇报格式
+
+一个任务算完成，必须同时满足：
+
+- 给出可复现命令与输出（compile / unittest / dry-run / build / lint 中受影响的部分）。
+- 新增或修改的接口有测试；没有跳过、删除或弱化既有测试。
+- 文档与状态同步：第 0 节、第 15 节、第 16.6 节、README 中受影响的部分。
+- 工作区只包含预期改动；提交信息用 `feat(scope): ...` 或 `fix(scope): ...`，推送后确认 `git status` 与远程一致。
+
+汇报按第 10.5 节的六项结构：改动文件、关键决策与偏离、命令与结果、风险与未完成项、状态表更新、下一个模块。

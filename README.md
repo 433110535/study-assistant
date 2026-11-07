@@ -79,16 +79,20 @@
 
 ```mermaid
 flowchart LR
-    U[用户] --> UI[Streamlit 工作台]
-    UI --> A[ReAct Agent]
+    U[用户] --> W[React Web UI /app]
+    U --> L[Streamlit Legacy 8501]
+    W --> API[FastAPI /v1 · 127.0.0.1:8000]
+    L --> API
+    API --> A[ReAct Agent]
     A -->|Function Calling| T[工具注册层]
     T --> R[RAG 检索]
     T --> V[read_image · VL]
-    T --> P[讲解 / 计划 / 出题]
+    T --> P[讲解 / 计划 / 出题 / 代码沙箱]
     R --> D[(PDF · FAISS)]
     A --> LLM[Qwen / DashScope]
-    A --> S[(SQLite trace)]
-    S --> E[评测 · 回归 · 规划]
+    A --> S[(SQLite: trace / 错题 / 评测 / 会话)]
+    S --> E[评测 · 回归 · /ops]
+    W --> OPS["/ops 可观测看板"]
 ```
 
 一次带图片的问答路径：
@@ -107,8 +111,10 @@ flowchart LR
 
 | 类别 | 选型 | 说明 |
 |---|---|---|
-| 语言 | Python 3.11+ | 后端与前端同语言 |
-| 界面 | Streamlit | 多页面工作台 |
+| 语言 | Python 3.11+ | 后端与工具链 |
+| 主界面 | React 19 + Vite 8 + TypeScript + Tailwind | ClickHouse 极黑霓虹风格，7 页，`/app` |
+| 兼容界面 | Streamlit | Legacy 回退入口，8501 |
+| API | FastAPI | `/v1` + `/app` 静态托管，只绑 `127.0.0.1:8000` |
 | Agent | LangChain 1.7 + 自研 ReAct | `langchain-core` / `langchain-openai`，流式与工具可视化 |
 | 大模型 | Qwen-Max（DashScope） | Function Calling |
 | 视觉 | Qwen-VL（`VISION_MODEL`） | 题目识图 |
@@ -189,16 +195,20 @@ python -m backend.platform.eval_runner --dry-run
 study-assistant/
 ├── backend/
 │   ├── agents/          # ReAct、工具注册表、事件模型
-│   ├── tools/             # 讲解、计划、出题、vision.py、code_sandbox.py
-│   ├── knowledge/         # PDF、FAISS
-│   ├── platform/          # trace_store（SQLite）
+│   ├── api/             # FastAPI 路由、local_client、SPA 托管
+│   ├── tools/           # 讲解、计划、出题、vision、code_sandbox
+│   ├── knowledge/       # PDF、FAISS
+│   ├── platform/        # trace / 会话 / 错题 / 评测 / 数据集
+│   ├── workers/         # 复习调度与回复入口
 │   ├── config.py
 │   └── llm_helper.py
 ├── frontend/
-│   └── app.py             # Streamlit 工作台
-├── tests/
-├── data/                  # 索引、上传、app.db（默认不入库）
-├── 说明/                  # PLAN 等
+│   └── app.py           # Streamlit Legacy 工作台
+├── web_UI/              # React Web UI（dist 为构建产物，不入库）
+├── eval/                # 评测集与快照
+├── tests/               # 239 项后端单测
+├── data/                # 索引、上传、app.db（默认不入库）
+├── 说明/                # PLAN 等；Codex 先读 PLAN 第 16 节
 ├── requirements.txt
 └── README.md
 ```

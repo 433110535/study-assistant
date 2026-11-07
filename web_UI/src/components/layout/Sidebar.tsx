@@ -11,6 +11,7 @@ import {
   ChevronRight,
   X,
   Terminal,
+  Activity,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -28,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'review', label: '错题复习 REVIEW', path: '/review', icon: RotateCcw, phase: 'U4' },
   { id: 'knowledge', label: '知识库 KNOWLEDGE', path: '/knowledge', icon: BookOpen, phase: 'U4' },
   { id: 'code', label: '代码助教 CODE', path: '/code', icon: Code2, phase: 'U5' },
+  { id: 'ops', label: '评测中台 OPS', path: '/ops', icon: Activity, phase: 'U7' },
 ];
 
 interface SidebarProps {

@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import secrets
 import tempfile
@@ -20,9 +21,15 @@ from typing import Any, Callable, Dict, Iterator, Optional
 
 from datetime import datetime
 
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+
 from fastapi import Body, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from backend.config import TRACE_DB_PATH
 from backend.platform.auth_store import (
@@ -123,6 +130,7 @@ def create_app(
     auth_mode: Optional[str] = None,
     ocr_fn: Optional[Callable[..., str]] = None,
     quiz_grade_fn: Optional[Callable[..., str]] = None,
+    dist_dir: Optional[Path | str] = None,
 ) -> FastAPI:
     database = Path(db_path) if db_path is not None else TRACE_DB_PATH
     init_domain_db(database)
@@ -140,12 +148,6 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    dist_dir = Path("web_UI/dist")
-    if dist_dir.is_dir():
-        from fastapi.staticfiles import StaticFiles
-
-        app.mount("/app", StaticFiles(directory=str(dist_dir), html=True), name="web_ui")
 
     failed_login_attempts: Dict[str, list[float]] = {}
     _rate_limit_lock = threading.Lock()
@@ -276,6 +278,26 @@ def create_app(
             raise HTTPException(status_code=404, detail="会话不存在")
         messages = load_session_messages_detailed(session_id, db_path=database)
         return {"session_id": session_id, "messages": messages}
+
+    @app.post("/v1/sessions/{session_id}/messages")
+    def append_session_message_route(
+        session_id: str,
+        payload: dict = Body(...),
+        current_user: Dict[str, Any] = Depends(require_key),
+    ) -> dict:
+        from backend.platform.chat_store import append_message, get_session
+
+        sess = get_session(session_id, db_path=database)
+        if sess is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if current_user.get("auth_type") == "session" and sess.get("user_id") != current_user.get("user_id"):
+            raise HTTPException(status_code=404, detail="会话不存在")
+        role = str(payload.get("role") or "").strip()
+        if not role:
+            raise HTTPException(status_code=422, detail="缺少 role")
+        content = str(payload.get("content") or "")
+        msg_id = append_message(session_id, role, content, db_path=database)
+        return {"id": msg_id, "session_id": session_id, "role": role, "status": "ok"}
 
     @app.post("/v1/sessions")
     def create_session_route(
@@ -476,11 +498,28 @@ def create_app(
         ]
         return {"tools": rows}
 
+    @app.get("/v1/traces", dependencies=guard)
+    def list_traces_route(
+        limit: int = 20,
+        offset: int = 0,
+        status: str = "",
+        model: str = "",
+    ) -> dict:
+        from backend.platform.trace_store import list_traces
+
+        return list_traces(
+            limit=limit,
+            offset=offset,
+            status=status,
+            model=model,
+            db_path=database,
+        )
+
     @app.get("/v1/traces/{trace_id}", dependencies=guard)
     def trace(trace_id: str) -> dict:
-        from backend.platform.trace_store import get_trace
+        from backend.platform.trace_store import get_run_with_tools
 
-        found = get_trace(trace_id, db_path=database)
+        found = get_run_with_tools(trace_id, db_path=database)
         if found is None:
             raise HTTPException(status_code=404, detail="没有这次运行")
         return found
@@ -496,6 +535,21 @@ def create_app(
         from backend.platform.eval_runner import load_failure_board
 
         return load_failure_board(database)
+
+    @app.get("/v1/eval/runs", dependencies=guard)
+    def list_eval_runs_route(limit: int = 50) -> dict:
+        from backend.platform.eval_runner import list_eval_runs
+
+        return {"runs": list_eval_runs(limit=limit, db_path=database)}
+
+    @app.get("/v1/eval/compare", dependencies=guard)
+    def compare_eval_runs_route(base_run_id: str, target_run_id: str) -> dict:
+        from backend.platform.eval_runner import compare_eval_runs
+
+        comp = compare_eval_runs(base_run_id, target_run_id, db_path=database)
+        if comp is None:
+            raise HTTPException(status_code=404, detail="指定的评测运行不存在")
+        return comp
 
     @app.post("/v1/mistakes", dependencies=guard)
     def create_mistake(payload: dict = Body(...)) -> dict:
@@ -1116,6 +1170,85 @@ def create_app(
         restore_database(backup_path, database)
         counts = count_database_records(database)
         return {"restored": True, "records": counts}
+
+    # ---------------------------------------------------------
+    # 前端静态产物托管与 SPA 路由 Fallback (/app)
+    # ---------------------------------------------------------
+    if dist_dir is not None:
+        resolved_dist_dir = Path(dist_dir).resolve()
+    else:
+        env_dist = os.getenv("WEB_UI_DIST", "").strip()
+        if env_dist:
+            resolved_dist_dir = Path(env_dist).resolve()
+        else:
+            project_root = Path(__file__).resolve().parent.parent.parent
+            resolved_dist_dir = (project_root / "web_UI" / "dist").resolve()
+
+    def _serve_spa_index() -> Response:
+        index_file = resolved_dist_dir / "index.html"
+        if not index_file.is_file():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Frontend build artifacts not found at web_UI/dist. Please run 'npm run build' in web_UI first."
+                },
+            )
+        return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/", include_in_schema=False)
+    def root_redirect() -> Response:
+        return RedirectResponse(url="/app")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    @app.get("/favicon.svg", include_in_schema=False)
+    def serve_favicon() -> Response:
+        fav_ico = resolved_dist_dir / "favicon.ico"
+        if fav_ico.is_file():
+            return FileResponse(fav_ico, media_type="image/x-icon")
+        fav_svg = resolved_dist_dir / "favicon.svg"
+        if fav_svg.is_file():
+            return FileResponse(fav_svg, media_type="image/svg+xml")
+        return Response(status_code=204)
+
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/", include_in_schema=False)
+    def serve_spa_root() -> Response:
+        return _serve_spa_index()
+
+    @app.get("/app/{full_path:path}", include_in_schema=False)
+    def serve_spa_path(full_path: str) -> Response:
+        index_file = resolved_dist_dir / "index.html"
+        if not index_file.is_file():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Frontend build artifacts not found at web_UI/dist. Please run 'npm run build' in web_UI first."
+                },
+            )
+
+        target_path = (resolved_dist_dir / full_path).resolve()
+        # 路径穿越防范
+        try:
+            if not target_path.is_relative_to(resolved_dist_dir):
+                raise HTTPException(status_code=404, detail="Not Found")
+        except (ValueError, AttributeError):
+            try:
+                target_path.relative_to(resolved_dist_dir)
+            except ValueError:
+                raise HTTPException(status_code=404, detail="Not Found")
+
+        # 真实静态文件直接返回
+        if target_path.is_file():
+            media_type, _ = mimetypes.guess_type(str(target_path))
+            return FileResponse(target_path, media_type=media_type)
+
+        # 若请求指向真实目录，或带静态文件扩展名，或处于静态资源路径下，严格返回 404，不回退 HTML
+        clean_path = full_path.strip("/")
+        if target_path.is_dir() or target_path.suffix or clean_path == "assets" or clean_path.startswith("assets/"):
+            raise HTTPException(status_code=404, detail="Static asset not found")
+
+        # 前端页面路由回退
+        return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
 
     return app
 

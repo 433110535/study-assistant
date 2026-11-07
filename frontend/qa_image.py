@@ -1,4 +1,6 @@
-"""问答页识图预览：先识别，再决定要不要回填修正框。"""
+"""问答页识图预览：先识别，再决定要不要回填修正框。
+[Deprecated/Legacy UI] 优先通过 backend.api.local_client 标准 API 访问 OCR 接口。
+"""
 from __future__ import annotations
 
 import os
@@ -14,22 +16,28 @@ def preview_image_text(
     suffix: str = ".jpg",
     reader: Optional[Callable[[str], str]] = None,
 ) -> str:
-    """把图片字节交给 read_image。临时文件在返回前删除。"""
+    """把图片字节交给 OCR 接口。支持注入 reader 测试替身。"""
     if not raw:
         return "图片是空的，无法识别。"
     safe = suffix.lower() if suffix.lower() in _ALLOWED_SUFFIXES else ".jpg"
-    if reader is None:
-        from backend.tools.vision import read_image
+    if reader is not None:
+        handle, name = tempfile.mkstemp(suffix=safe)
+        os.close(handle)
+        path = Path(name)
+        try:
+            path.write_bytes(raw)
+            return reader(str(path))
+        finally:
+            path.unlink(missing_ok=True)
 
-        reader = read_image
-    handle, name = tempfile.mkstemp(suffix=safe)
-    os.close(handle)
-    path = Path(name)
+    # 只走统一 API 契约，不再在页面进程内直连 vision
     try:
-        path.write_bytes(raw)
-        return reader(str(path))
-    finally:
-        path.unlink(missing_ok=True)
+        from backend.api.local_client import ocr_image_api
+
+        res = ocr_image_api(raw, filename=f"image{safe}")
+        return str(res.get("text") or "")
+    except Exception as e:
+        return f"识图失败: {e}"
 
 
 def remember_ocr_preview(

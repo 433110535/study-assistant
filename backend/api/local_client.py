@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 
 def request_json(
@@ -591,3 +591,93 @@ def list_code_attempts_api(
     res = request_json("GET", "/v1/code/attempts", db_path=db_path, params={"thread_id": thread_id, "user_id": user_id, "limit": limit})
     return res.get("attempts", [])
 
+
+
+def append_message_api(
+    session_id: str,
+    role: str,
+    content: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "POST",
+        f"/v1/sessions/{session_id}/messages",
+        db_path=db_path,
+        json_body={"role": role, "content": content},
+    )
+
+
+def ensure_session_api(
+    user_id: str = "student",
+    db_path: Optional[Path] = None,
+) -> str:
+    res = list_sessions_api(user_id=user_id, limit=1, db_path=db_path)
+    sessions = res.get("sessions", [])
+    if sessions:
+        return sessions[0]["id"]
+    return create_session_api(user_id=user_id, title="默认会话", db_path=db_path)
+
+
+def load_messages_api(
+    session_id: str,
+    db_path: Optional[Path] = None,
+) -> list:
+    res = get_session_messages_api(session_id=session_id, db_path=db_path)
+    return res.get("messages", [])
+
+
+def grade_quiz_api(
+    questions: str,
+    answers: str,
+    db_path: Optional[Path] = None,
+) -> str:
+    res = request_json(
+        "POST",
+        "/v1/quiz/grade",
+        db_path=db_path,
+        json_body={"questions": questions, "answers": answers},
+    )
+    return res.get("feedback", "")
+
+
+def list_traces_api(
+    limit: int = 20,
+    offset: int = 0,
+    status: str = "",
+    model: str = "",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+    if status:
+        params["status"] = status
+    if model:
+        params["model"] = model
+    return request_json("GET", "/v1/traces", db_path=db_path, params=params)
+
+
+def get_trace_api(
+    run_or_trace_id: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json("GET", f"/v1/traces/{run_or_trace_id}", db_path=db_path)
+
+
+def list_eval_runs_api(
+    limit: int = 50,
+    db_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    res = request_json("GET", "/v1/eval/runs", db_path=db_path, params={"limit": limit})
+    return res.get("runs", [])
+
+
+def compare_eval_runs_api(
+    base_run_id: str,
+    target_run_id: str,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    return request_json(
+        "GET",
+        "/v1/eval/compare",
+        db_path=db_path,
+        params={"base_run_id": base_run_id, "target_run_id": target_run_id},
+    )

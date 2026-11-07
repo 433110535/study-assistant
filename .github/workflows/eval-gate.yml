@@ -9,22 +9,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web_UI/package-lock.json
+
+      - name: Install Frontend Dependencies & Build Web UI
+        working-directory: web_UI
+        run: |
+          npm ci
+          npm run build
+          test -f dist/index.html || (echo "dist/index.html not found!" && exit 1)
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
+          cache: "pip"
+
+      - name: Install Python Dependencies
         run: pip install -r requirements.txt
-      - name: Offline tests
-        run: >-
-          python -m unittest
-          tests.test_eval_runner
-          tests.test_grading
-          tests.test_review_schedule
-          tests.test_mistake_store
-          tests.test_code_sandbox
-          tests.test_chat_store
-          tests.test_code_attempt_store
-          tests.test_vision
-          -v
+
+      - name: Full Backend Unit Tests (239 tests)
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
       - name: Tool-selection dry run
         run: python -m backend.platform.eval_runner --dry-run

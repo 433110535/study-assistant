@@ -100,6 +100,69 @@ def get_run(run_id: str, db_path: Optional[Path] = None) -> Optional[Dict[str, A
     return None if row is None else dict(row)
 
 
+def list_traces(
+    limit: int = 20,
+    offset: int = 0,
+    status: str = "",
+    model: str = "",
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    path = Path(db_path or TRACE_DB_PATH)
+    init_trace_db(path)
+    limit = max(1, min(100, int(limit)))
+    offset = max(0, int(offset))
+    where_clauses = []
+    params = []
+    if status:
+        where_clauses.append("status = ?")
+        params.append(status)
+    if model:
+        where_clauses.append("model = ?")
+        params.append(model)
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    with _connect(path) as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM runs {where_sql}", tuple(params)).fetchone()[0]
+        query_sql = f'''
+            SELECT id, trace_id, session_id,
+                   substr(user_input, 1, 200) as user_input_preview,
+                   final_answer, iterations, tools_used, latency_ms,
+                   status, created_at, model, token_in, token_out, cost_yuan
+            FROM runs
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        '''
+        rows = conn.execute(query_sql, tuple(params + [limit, offset])).fetchall()
+    return {
+        "traces": [dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def get_run_with_tools(run_or_trace_id: str, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    path = Path(db_path or TRACE_DB_PATH)
+    init_trace_db(path)
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM runs WHERE id = ? OR trace_id = ?",
+            (run_or_trace_id, run_or_trace_id),
+        ).fetchone()
+        if row is None:
+            return None
+        calls = conn.execute(
+            '''
+            SELECT id, tool_name, args_json, result_preview, status, latency_ms, created_at
+            FROM tool_calls
+            WHERE run_id = ?
+            ORDER BY id ASC
+            ''',
+            (row["id"],),
+        ).fetchall()
+    return {"run": dict(row), "tool_calls": [dict(item) for item in calls]}
+
+
 @contextmanager
 def _connect(db_path: Path):
     conn = sqlite3.connect(str(db_path), check_same_thread=False)

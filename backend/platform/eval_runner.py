@@ -606,3 +606,133 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def list_eval_runs(limit: int = 50, db_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    path = Path(db_path or TRACE_DB_PATH)
+    ensure_eval_tables(path)
+    with _connect(path) as conn:
+        rows = conn.execute(
+            '''
+            SELECT id, dataset_name, dataset_version, mode, status,
+                   sample_count, passed, summary_json, started_at, finished_at
+            FROM eval_runs
+            ORDER BY started_at DESC
+            LIMIT ?
+            ''',
+            (limit,),
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["summary"] = _load_summary(d.get("summary_json"))
+        result.append(d)
+    return result
+
+
+def get_eval_run_detail(run_id: str, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    path = Path(db_path or TRACE_DB_PATH)
+    ensure_eval_tables(path)
+    with _connect(path) as conn:
+        row = conn.execute("SELECT * FROM eval_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        run_data = dict(row)
+        run_data["summary"] = _load_summary(run_data.get("summary_json"))
+        results = conn.execute(
+            '''
+            SELECT id, sample_id, tools_used, passed, detail, output_preview
+            FROM eval_results
+            WHERE eval_run_id = ?
+            ORDER BY id ASC
+            ''',
+            (run_id,),
+        ).fetchall()
+    run_data["results"] = [dict(item) for item in results]
+    return run_data
+
+
+def compare_eval_runs(
+    base_run_id: str,
+    target_run_id: str,
+    db_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    base = get_eval_run_detail(base_run_id, db_path=db_path)
+    target = get_eval_run_detail(target_run_id, db_path=db_path)
+    if not base or not target:
+        return None
+
+    base_results = {r["sample_id"]: r for r in base.get("results", [])}
+    target_results = {r["sample_id"]: r for r in target.get("results", [])}
+    all_sample_ids = sorted(list(set(base_results.keys()) | set(target_results.keys())))
+
+    regressions = []
+    fixes = []
+    samples = []
+
+    for sid in all_sample_ids:
+        b_res = base_results.get(sid)
+        t_res = target_results.get(sid)
+        b_pass = bool(b_res["passed"]) if b_res else None
+        t_pass = bool(t_res["passed"]) if t_res else None
+
+        if b_pass is True and t_pass is False:
+            status = "regression"
+            regressions.append(sid)
+        elif b_pass is False and t_pass is True:
+            status = "fixed"
+            fixes.append(sid)
+        elif b_pass is True and t_pass is True:
+            status = "both_passed"
+        elif b_pass is False and t_pass is False:
+            status = "both_failed"
+        elif b_pass is None:
+            status = "new_sample"
+        else:
+            status = "removed_sample"
+
+        samples.append({
+            "sample_id": sid,
+            "status": status,
+            "base_passed": b_pass,
+            "target_passed": t_pass,
+            "base_detail": b_res.get("detail", "") if b_res else "",
+            "target_detail": t_res.get("detail", "") if t_res else "",
+        })
+
+    base_summary = base.get("summary", {})
+    target_summary = target.get("summary", {})
+    b_acc = base_summary.get("accuracy", 0.0)
+    t_acc = target_summary.get("accuracy", 0.0)
+    b_faith = base_summary.get("faithfulness")
+    t_faith = target_summary.get("faithfulness")
+
+    delta = {
+        "accuracy_delta": round(t_acc - b_acc, 4),
+        "passed_delta": target.get("passed", 0) - base.get("passed", 0),
+        "faithfulness_delta": round(t_faith - b_faith, 4) if (t_faith is not None and b_faith is not None) else None,
+        "sample_count_delta": target.get("sample_count", 0) - base.get("sample_count", 0),
+        "regression_count": len(regressions),
+        "fixed_count": len(fixes),
+    }
+
+    return {
+        "base_run": {
+            "id": base["id"],
+            "dataset_name": base["dataset_name"],
+            "dataset_version": base["dataset_version"],
+            "started_at": base["started_at"],
+            "summary": base_summary,
+        },
+        "target_run": {
+            "id": target["id"],
+            "dataset_name": target["dataset_name"],
+            "dataset_version": target["dataset_version"],
+            "started_at": target["started_at"],
+            "summary": target_summary,
+        },
+        "delta": delta,
+        "regressions": regressions,
+        "fixes": fixes,
+        "samples": samples,
+    }

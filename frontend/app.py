@@ -1,5 +1,8 @@
 """
-学习辅助平台 - 前端界面
+[Deprecated / Legacy UI] 本页面为 Streamlit 历史前端，已转为轻量回退兼容模式。
+全新主力前端已迁移至 ClickHouse 极黑霓虹规范 React Web UI，访问地址: /app。
+会话、OCR、习题批改已收口至 backend.api.local_client API 契约层；代码助教仍在
+本页进程内直连 code_sandbox / code_attempt_store。
 视觉语言：Plane 风格工作台（白底 / 细线 / 深蓝强调，规范见 F:/UI/design.md）
 """
 import streamlit as st
@@ -44,13 +47,7 @@ else:
     APP_PASSWORD = "study2026"
     USING_DEMO_AUTH = True
 
-# FAISS向量知识库
-try:
-    from backend.knowledge.knowledge_base_faiss import FAISSKnowledgeBase
-    FAISS_KB_AVAILABLE = True
-except ImportError:
-    FAISSKnowledgeBase = None
-    FAISS_KB_AVAILABLE = False
+# 知识库统一经 local_client API 访问，页面进程内不再 import FAISS 实现。
 
 
 def highlight_keywords(text: str, query: str) -> str:
@@ -243,10 +240,10 @@ def _restore_chat_session() -> None:
         return
     user_id = st.session_state.get("auth_user") or "student"
     try:
-        from backend.platform.chat_store import ensure_session, load_messages
+        from backend.api.local_client import ensure_session_api, load_messages_api
 
-        session_id = ensure_session(user_id)
-        messages = load_messages(session_id)
+        session_id = ensure_session_api(user_id)
+        messages = load_messages_api(session_id)
     except Exception:
         return
     st.session_state.chat_session_id = session_id
@@ -260,10 +257,10 @@ def _restore_chat_session() -> None:
 
 def _open_saved_chat(session_id: str) -> None:
     """切到一条已保存的问答，不删除其他会话。"""
-    from backend.platform.chat_store import load_messages
+    from backend.api.local_client import load_messages_api
 
     user_id = st.session_state.get("auth_user") or "student"
-    messages = load_messages(session_id)
+    messages = load_messages_api(session_id)
     st.session_state.chat_session_id = session_id
     st.session_state.messages = messages
     st.session_state.pop("qa_pending", None)
@@ -279,9 +276,9 @@ def _persist_message(role: str, content: str) -> None:
     if not session_id:
         return
     try:
-        from backend.platform.chat_store import append_message
+        from backend.api.local_client import append_message_api
 
-        append_message(session_id, role, content)
+        append_message_api(session_id, role, content)
     except Exception:
         pass
 
@@ -341,9 +338,9 @@ def clear_session_data():
         agent.clear_history()
     user_id = st.session_state.get("auth_user") or "student"
     try:
-        from backend.platform.chat_store import start_session
+        from backend.api.local_client import create_session_api
 
-        session_id = start_session(user_id)
+        session_id = create_session_api(user_id=user_id, title="新对话")
         st.session_state.chat_session_id = session_id
         st.session_state.messages = []
         if agent is not None:
@@ -461,10 +458,11 @@ def render_sidebar():
             '<div class="brand">'
             f'<div class="brand-mark">{LOGO_SVG}</div>'
             '<div><div class="brand-name">学习辅助平台</div>'
-            '<div class="brand-sub">Study Workbench</div></div>'
+            '<div class="brand-sub">Study Workbench (Legacy UI)</div></div>'
             "</div>",
             unsafe_allow_html=True,
         )
+        st.info("💡 **推荐新界面**：主力前端已上线，请访问 [/app](http://127.0.0.1:8000/app) 体验。")
 
         if not st.session_state.get('initialized', False):
             st.error("系统未初始化")
@@ -802,11 +800,15 @@ def _stream_answer(question: str):
 
 
 def _render_saved_chats() -> None:
-    from backend.platform.chat_store import list_sessions
+    from backend.api.local_client import list_sessions_api
 
     user_id = st.session_state.get("auth_user") or "student"
     current = st.session_state.get("chat_session_id")
-    sessions = list_sessions(user_id)
+    try:
+        res = list_sessions_api(user_id=user_id)
+        sessions = res.get("sessions", [])
+    except Exception:
+        sessions = []
     if len(sessions) <= 1:
         return
     with st.expander("历史会话", expanded=False):
@@ -1391,27 +1393,10 @@ def render_quiz():
                 if user_answer.strip():
                     with st.spinner("AI 正在批改…"):
                         try:
-                            from backend.llm_helper import get_llm
-                            from langchain_core.prompts import ChatPromptTemplate
-                            llm = get_llm(temperature=0.3)
-                            prompt = ChatPromptTemplate.from_messages([
-                                ("system", """你是一位严格的老师。请根据以下题目批改学生的答案。
+                            from backend.api.local_client import grade_quiz_api
 
-逐题判断对错，给出正确答案和简要解析，最后给出总分（X/Y）。
-
-输出格式：
-| 题号 | 学生答案 | 正确/错误 | 正确答案 | 解析 |
-|------|---------|----------|---------|------|
-
-总分: X/Y"""),
-                                ("human", "[题目]\n{questions}\n\n[学生答案]\n{answers}")
-                            ])
-                            chain = prompt | llm
-                            response = chain.invoke({
-                                "questions": st.session_state.last_quiz,
-                                "answers": user_answer,
-                            })
-                            st.session_state.last_quiz_result = text_content(response.content)
+                            report = grade_quiz_api(st.session_state.last_quiz, user_answer)
+                            st.session_state.last_quiz_result = report
                             st.session_state.quiz_score_count = st.session_state.get('quiz_score_count', 0) + 1
                         except Exception as e:
                             st.error(f"批改失败: {str(e)}")
@@ -1453,9 +1438,9 @@ def _grade_uploaded_paper(uploaded_file):
     try:
         Path(path).write_bytes(uploaded_file.getvalue())
         try:
-            from backend.tools.vision import read_image
+            from frontend.qa_image import preview_image_text
 
-            recognized = read_image(path)
+            recognized = preview_image_text(uploaded_file.getvalue(), suffix=suffix)
         except Exception as exc:
             return "", None, f"识图失败: {exc}"
         if not isinstance(recognized, str):

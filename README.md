@@ -70,7 +70,7 @@
 
 - 拍照批改的真实试卷验收，以及真实飞书 webhook 验收
 - 代码助教的容器隔离（64MB 内存上限已有）
-- 独立 Web UI（React + Vite，ClickHouse 风格，6 页起步，见 PLAN 第 13 节），以及 Streamlit 剩余直连页面接入新 API
+- Streamlit 代码助教页接入 `/v1/code/*`；新 Web UI 的 Playwright E2E、浏览器视觉走查与 Lighthouse 验收
 - Postgres / MinIO 与多用户部署
 
 ---
@@ -153,17 +153,31 @@ VISION_MODEL=qwen-vl-max
 启动：
 
 ```bash
-python start.py
-# 或
-streamlit run frontend/app.py
+# 启动统一后端服务与 React Web UI 前端（推荐）
+python -m backend.api
 ```
 
-浏览器访问 `http://localhost:8501`。在 **在线问答** 页可上传题目图片进行识题讲解。
+浏览器访问：
+- **主工作台 (React Web UI · ClickHouse 极黑霓虹风格)**：[`http://127.0.0.1:8000/app`](http://127.0.0.1:8000/app)
+- **评测与可观测中台 (OPS & Evaluation)**：[`http://127.0.0.1:8000/app/ops`](http://127.0.0.1:8000/app/ops)
+- **历史兼容回退入口 (Streamlit - Legacy UI)**：
+  ```bash
+  streamlit run frontend/app.py
+  ```
+  访问 `http://localhost:8501`（会话、OCR、习题批改已收口至统一 API；代码助教仍在本页进程内直连沙箱与记录库）。
 
-### 测试（不调用 LLM）
+### 前端构建与代码检查
 
 ```bash
-python -m unittest discover -s tests -v
+cd web_UI
+npm run build
+npm run lint
+```
+
+### 全量自动化测试（不调用 LLM，239 项测试全覆盖）
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v
 python -m backend.platform.eval_runner --dry-run
 ```
 
@@ -224,7 +238,7 @@ study-assistant/
 | P2 | 错题本 + 拍照批改闭环 | 对照判分和整卷拆题已有，真实试卷未验收 |
 | P3 | 代码执行助教 | 本机沙箱有超时和 64MB 内存上限，无容器 |
 | P4 | 主动复习与推送 | 每日调度、本地发件箱和可选 SMTP 已有，真实飞书未验收 |
-| P5 | 评测 runner、门禁、失败归因页、FastAPI 服务化 | 本机 API 和 SQLite 备份已有，页面仍直连数据库 |
+| P5 | 评测 runner、门禁、失败归因页、FastAPI 服务化 | 本机 API、SQLite 备份与 React Web UI（含 /ops）已有；Streamlit 代码助教仍直连 |
 
 ---
 

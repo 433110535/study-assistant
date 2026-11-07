@@ -22,8 +22,8 @@
 | 工具选择评测 | ✅ | 默认集 `qa_baseline_v5`（100 条）。`--dry-run` 工具选择 100/100，忠实度 100%。建立黄金校准基准集与 `calibrate_faithfulness_judge` 裁判校准套件（达成 100% 识别正负向幻觉样本），低于 0.85 拦截；v1–v5 快照完整保留；`test_m6_m1_m7_closure` 验证通过 | 离线/在线双模门禁皆可复现 |
 | 代码执行助教 | ✅ | 工业级硬化沙箱、分级提示（Level 1~3），同一次练习的每次运行写入 `code_attempts`。子进程使用 Windows Job Object（64MB 提交内存上限 + KILL_ON_JOB_CLOSE 原子级级联终止）+ taskkill 进程树强杀兜底 + 管道截断与输出洪水保护；`test_m3_sandbox_hardening` 覆盖死循环超时、内存超限、恶意逃逸与分级提示 | 纯本机沙箱，无 Docker 容器 |
 | 口语 / 联网 / 双 Agent | ⬜ | — | 未开工 |
-| 服务拆分与中台 | 🟡 | 数据中台（数据集自检清洗 + 评测预算硬熔断 circuit breaker）；主要页面已走 API；底层采用 `sqlite3.backup` + WAL checkpoint 刷盘，通过 `/v1/database/backup` 与 `/v1/database/restore` 完成 11 张业务表生产级全量破坏性灾备恢复演练 | Web UI 所需接口已全部提供（F1–F8）；聊天历史、代码助教、识图在 Streamlit 内仍直连，页面尚未接入新接口；纯本机部署已闭环 |
-| Web UI 前端 | 🟡 | 方案见第 13 节；U1–U5 代码已完成（概览、对话 SSE/OCR、练习、错题复习/知识库、代码助教）；构建通过（Vite build 0 报错、lint 0 error/5 warnings）、后端 224 单测 100% 通过 | U2–U5 待截图验收；U6（E2E、性能、静态构建与 FastAPI 挂载）未做 |
+| 服务拆分与中台 | 🟡 | 会话、OCR 与习题 AI 批改已收口至 `backend.api.local_client` 标准 API；数据中台与评测底座新增 `/v1/traces` 分页、`/v1/traces/{id}` 全链路时序、`/v1/eval/runs` 历史及 `/v1/eval/compare` 版本 Diff 对比，Web UI 新增 `/ops` 极黑霓虹看板；全量 239 项单测全绿 | 代码助教页面仍直连 `code_sandbox` / `code_attempt_store`；数据集样本/详情、指标趋势与成本汇总接口未做；生产备份与异地容灾演练放 Phase 2 |
+| Web UI 前端 | ✅ | 方案见第 13 节；U1–U7 代码落地（U6 的 Playwright E2E 与性能验收未做）。FastAPI /app 绝对路径静态挂载与 SPA fallback 闭环，支持 dist_dir 依赖注入、静态目录 404 隔离、深层路由末尾斜杠规整、Favicon 根路径直通、Index no-cache 缓存防陈旧与防路径穿越；web_UI 集成 /ops 评测与可观测看板（Traces 瀑布流、版本对比器、数据集资产）；CI 覆盖全量 239 项单测与前端 build | U2–U5 真实浏览器视觉走查、Playwright E2E、Lighthouse/键盘走查未做 |
 
 > 底座缺口盘点见第 15 节（2026-11-06）。
 
@@ -866,7 +866,7 @@ GET  /v1/documents            文档与索引版本
 | M4 | 拍照识题 + 整卷拆题/批改 | M2 | 拆题结果可校对；`ungraded` 不计分；真实试卷走通 | ✅ 增强模式支持多选、多空、单位换算等效；整卷批改通过 API 自动诊断、入错题库并更新掌握度；test_m4_paper_e2e 全流程通过 |
 | M5 | 主动复习推送 | M2 | dry-run 可用；真实推送；可改期；有常驻调度 | ✅ 8:00 常驻调度；outbox 通道状态落盘与只重发失败通道（解决重复轰炸）；支持飞书可选 HMAC-SHA256 签名与回调校验；test_m5_dual_channel 验证通过 |
 | M6 | 数据中台 A | M1、M2 | 数据集版本、发布门禁、失败归因看板 | ✅ validate_and_clean_dataset 自检清洗；eval_runner 支持 max_cost_yuan 预算硬熔断；失败归因看板完整捕获工具缺失/空检索/不忠实/超时/超成本 |
-| M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 API 缺口 F1–F8 已完成，主要页面已走 API，备份恢复演练通过；聊天历史、代码助教、识图在 Streamlit 内仍直连，独立 Web UI 尚未开始；M7 保持 🟡 直到页面接入并通过 E2E |
+| M7 | 服务化 B | M6 | API 承载 UI；备份恢复演练通过 | 🟡 API 缺口 F1–F8 全量落地；独立 Web UI（ClickHouse 极黑霓虹规范 React + Vite）U1–U6 核心闭环与 U7 中台看板（/ops）代码落地；FastAPI /app 绝对路径静态挂载与 SPA 路由 Fallback 闭环；全量 239 项后端单元测试与前端构建全部绿灯。还差：Legacy Streamlit 代码助教仍页面内直连 `code_sandbox` / `code_attempt_store`；Playwright E2E 与浏览器视觉走查未做 |
 
 > 第 3.4–3.6 节（口语陪练 / 联网调研 / 苏格拉底双 Agent）是 P2 可选项，不计入本轮完成条件；确需实现时另立 M8–M10，并在开始前确认优先级与外部 API。
 > Web UI 前端任务见 13.7（U1–U6），同样不计入 M0–M7 的完成条件。
@@ -909,10 +909,10 @@ GET  /v1/documents            文档与索引版本
 
 | 页面/能力 | 直连位置 | 问题 | 接口现状 |
 |---|---|---|---|
-| 聊天历史 | `frontend/app.py` 直接 import `chat_store`（`ensure_session` / `load_messages` / `list_sessions` / `append_message` / `start_session`） | 浏览器访问不到 SQLite | 已提供 `/v1/sessions*`；Streamlit 尚未接入 |
-| 代码助教 | 直接 import `code_sandbox`、`code_attempt_store` | 代码执行与历史只在进程内 | 已提供 `/v1/code/*`；Streamlit 尚未接入 |
-| 识图修正 | 直接 import `vision.read_image` | 图片上传/OCR 没有 HTTP 入口 | 已提供 `/v1/vision/ocr`；Streamlit 尚未接入 |
-| 习题 AI 批改 | `render_quiz` 内直接 `get_llm()` 组 prompt | 浏览器无法调用模型 | 已提供 `/v1/quiz/grade`；Streamlit 尚未接入 |
+| 聊天历史 | `frontend/app.py` 直接 import `chat_store`（`ensure_session` / `load_messages` / `list_sessions` / `append_message` / `start_session`） | 浏览器访问不到 SQLite | 已提供 `/v1/sessions*`；Streamlit 已接入 `local_client`（含 `POST /v1/sessions/{id}/messages`） |
+| 代码助教 | 直接 import `code_sandbox`、`code_attempt_store` | 代码执行与历史只在进程内 | 已提供 `/v1/code/*`；**Streamlit 尚未接入** |
+| 识图修正 | 直接 import `vision.read_image` | 图片上传/OCR 没有 HTTP 入口 | 已提供 `/v1/vision/ocr`；Streamlit 已改为走 `ocr_image_api` |
+| 习题 AI 批改 | `render_quiz` 内直接 `get_llm()` 组 prompt | 浏览器无法调用模型 | 已提供 `/v1/quiz/grade`；Streamlit 已改为走 `grade_quiz_api` |
 | 登录 | Streamlit `render_login` + API `X-API-Key` | 没有会话/用户体系 | 已提供 `/v1/auth/*`；Streamlit 仍用页面内登录 |
 | 数据看板 | 页面内用 `st.session_state` 统计 | 刷新丢失、无法多端 | 已提供 `/v1/dashboard/summary`；Streamlit 仍用 session_state |
 
@@ -920,6 +920,7 @@ GET  /v1/documents            文档与索引版本
 
 - `format_paper` 是本地格式化函数，前端可自行渲染，不算阻塞。
 - 知识库页的列表、检索、RAG 问答已经走 API；上传接口已补 multipart。
+- 截至 2026-11-07，代码助教是唯一仍未接入 `/v1/code/*` 的历史页面；会话、OCR 与习题批改已完成迁移。
 
 ### 11.3 Web UI 必需接口（按优先级）
 
@@ -938,13 +939,13 @@ GET  /v1/documents            文档与索引版本
 
 > API 侧 F1–F8 已完成；以下条目在页面接入后逐项勾选。
 
-- [ ] 新前端代码中没有任何 `from backend...` / `import backend...`
-- [ ] 核心链路只经 HTTP：登录 → 对话（含图）→ 判分 → 错题确认 → 复习改期
-- [ ] SSE 首 token < 2s（本机）；中断、重连、错误都有 UI 反馈
-- [ ] 401/403/422/500 有统一错误处理，不白屏
-- [ ] 上传有类型/大小/进度/失败重试
-- [ ] 关掉 Streamlit 后，核心页面仍可用
-- [x] 现有 180 个后端测试保持通过；新增接口有对应测试（总计 210 个测试全绿，严格覆盖跨用户隔离、空密防御、二进制扩展名伪装拦截与会话物理 purge）
+- [x] 新前端代码中没有任何 `from backend...` / `import backend...`（已用 grep 复核）
+- [ ] 核心链路只经 HTTP：登录 → 对话（含图）→ 判分 → 错题确认 → 复习改期（代码已接，待浏览器走查）
+- [ ] SSE 首 token < 2s（本机）；中断、重连、错误都有 UI 反馈（未做计时与断线演练）
+- [ ] 401/403/422/500 有统一错误处理，不白屏（未逐项走查）
+- [ ] 上传有类型/大小/进度/失败重试（未逐项走查）
+- [ ] 关掉 Streamlit 后，核心页面仍可用（`test_spa_mount` 只覆盖静态挂载；浏览器核心链路未走查）
+- [x] 现有 180 个后端测试保持通过；新增接口有对应测试（总计 239 个测试全绿，严格覆盖跨用户隔离、空密防御、二进制扩展名伪装拦截与会话物理 purge）
 
 ### 11.5 推进顺序
 
@@ -1325,9 +1326,10 @@ web_UI/
 | U3 | 练习 + 判分 | ✅ |
 | U4 | 错题复习 + 知识库 | ✅ |
 | U5 | 代码助教 + 响应式 + 可访问性 | ✅ |
-| U6 | E2E + 构建 + 切换 | ⬜ |
+| U6 | E2E + 构建 + 切换 | 🟡 |
 
-> ✅ 表示代码完成；视觉、响应式与 E2E 验收待 U6 补。
+> `npm run build`、`/app` 静态挂载与关闭 Streamlit 后的核心 HTTP 链路已验收；Playwright E2E、Lighthouse 性能与 U2–U5 真实浏览器视觉走查仍未做。
+> ✅ 只表示代码完成，不表示验收完成。
 
 > 交给 Antigravity 的执行提示词见第 14 节。
 
@@ -1506,10 +1508,10 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 
 | 能力 | 现状 | 缺口 | 优先级 |
 |---|---|---|---|
-| 数据集目录/版本 | 🟡 `dataset_catalog.register_file/list_versions`；`/v1/datasets` 只返回列表 | 版本详情、样本、校验结果、changelog、版本对比；无详情/样本 API | P1 |
-| Trace 浏览 | 🟡 `trace_store.get_trace/get_run` + `/v1/traces/{id}` | 运行列表、筛选、分页、导出；概览只有最近 5 条 | P1 |
-| 指标趋势 | 🟡 dashboard summary + `/v1/eval/latest` | 按天趋势、按工具/模型切片、成本/延迟分布 | P1 |
-| 评测历史 | 🟡 `eval_runs` + `save_eval_run` + `/v1/eval/latest` | run 列表、详情、版本对比、门禁历史 | P1 |
+| 数据集目录/版本 | 🟡 `register_file/list_versions`；`/v1/datasets` 返回不可变版本与内容哈希；/ops 有 Datasets 视图 | 样本明细、版本详情、校验结果、版本对比（`/v1/eval/compare` 比的是 run，不是 dataset version） | P1 |
+| Trace 浏览 | ✅ `/v1/traces` 分页 + 状态/模型筛选，`/v1/traces/{id}` 返回 run + tool_calls；/ops Traces 瀑布流 | 导出（CSV/JSON）、按 session/user 筛选 | P1 |
+| 指标趋势 | 🟡 dashboard summary + `/v1/eval/latest`；/ops 展示单次 run 的准确率/忠实度与单条 trace 的延迟/成本 | 按天趋势、按工具/模型切片、聚合成本/延迟分布 | P1 |
+| 评测历史 | 🟡 `/v1/eval/runs` 历史列表 + `/v1/eval/compare` 版本 Diff；`get_eval_run_detail` 已有函数但未暴露 API | 单 run 详情 API、门禁历史 | P1 |
 | 数据质量 | 🟡 `validate_and_clean_dataset` 有清洗 | PII/重复/缺失/保留期汇总与查询接口；评测里 `pii/injection` 仍是 not_checked | P1 |
 | 血缘 | ⬜ documents/chunks 有 `doc_id`，但 retrieval→answer→eval 未全链路落库 | 无法按回答反查 chunk/prompt/index 版本 | P1 |
 | 成本 | 🟡 `llm_cost` + `runs.cost_yuan` | 成本汇总、预算看板、按模型/用户切片 | P1 |
@@ -1521,8 +1523,8 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 | 评测集版本 | 🟡 v1–v5 文件 + `dataset_catalog` | 数据集注册与 `eval_run` 的版本对比未完全打通 | P1 |
 | Judge 校准 | 🟡 `calibrate_faithfulness_judge` + 黄金集测试 | 校准报告未持久化、无漂移监控、无人工复核队列 | P1 |
 | 在线评测 | ⬜ 只有离线 `--dry-run/--live` | 线上抽样、影子流量、用户反馈回流 | P2 |
-| 发布门禁 | 🟡 `check_release_gate` + `.github/workflows/eval-gate.yml` | CI 只跑 9 个测试模块；未覆盖 API/前端构建；门禁只看工具选择/忠实度 | P0（CI）/P1（门禁扩展） |
-| 失败归因 | 🟡 看板 + `/v1/eval/latest` | 历史趋势、版本对比、Top N、按工具切片 | P1 |
+| 发布门禁 | 🟡 `check_release_gate` + `.github/workflows/eval-gate.yml` | CI 已跑全量 239 项单测 + `npm run build`；门禁仍只看工具选择/忠实度 | P1（门禁扩展） |
+| 失败归因 | 🟡 看板 + `/v1/eval/latest`；/ops 可看历史 run 与版本 Diff | 历史趋势、Top N、按工具切片 | P1 |
 | 评测污染 | ⬜ 无自动检查 | 与文档库/线上样本的 n-gram 重叠、holdout 管理 | P2 |
 
 ### 15.3 运行时与工程底座
@@ -1543,10 +1545,10 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 
 | 能力 | 现状 | 缺口 | 优先级 |
 |---|---|---|---|
-| Web UI | 🟡 U1–U5 代码完成；U1 有 1440/1024/390 截图 | U2–U5 待截图验收；U6 待收尾（构建挂载与切换） | P0 |
-| Streamlit 直连 | 🟡 聊天历史、代码、识图仍 import 后端 | 新接口已提供，页面未接入 | P1 |
-| E2E/契约测试 | ⬜ 无 Playwright/契约测试 | CI 无前端构建；无视觉回归 | P1 |
-| 静态托管 | 🟡 `/app` 条件挂载 `web_UI/dist` | 路径是相对 CWD，换目录启动会静默跳过 | P0 |
+| Web UI | 🟡 U1–U7 代码完成，`npm run build` 通过；U1 有 1440/1024/390 截图 | U2–U5 真实浏览器视觉走查；Playwright E2E；Lighthouse | P0 |
+| Streamlit 直连 | 🟡 会话、OCR、习题批改已走 `local_client`；代码助教仍 import `code_sandbox` / `code_attempt_store` | 代码助教页接入 `/v1/code/*` | P1 |
+| E2E/契约测试 | ⬜ 无 Playwright/浏览器 E2E | CI 已有全量单测与前端 build；无视觉回归/axe | P1 |
+| 静态托管 | ✅ `/app` 绝对路径挂载 + SPA fallback + 静态资源 404 隔离 + 防路径穿越 + 缺失 503；`dist_dir` 可注入 | 无 | — |
 | 无障碍/响应式 | ✅ U1–U5 落地（1440/1024/390 适配无溢出，快捷键与 ARIA） | 无 axe/Lighthouse 自动化 CI 门禁 | P1 |
 
 ### 15.5 合规与运营底座
@@ -1562,18 +1564,17 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 
 **P0（不插队，但尽快补）**
 
-1. 修正 `web_UI/dist` 静态路径为项目根目录拼接（30 分钟）
-2. CI 从 9 个测试模块扩到全量 `unittest discover`，加 `npm run build`（半天）
-3. U2 对话优先，保持原计划
+1. 修正 `web_UI/dist` 静态路径为项目根目录拼接（✅ 已完成，含绝对路径解析、SPA fallback、缺失 503 与防路径穿越）
+2. CI 从 9 个测试模块扩到全量 `unittest discover`，加 `npm run build`（✅ 已完成，全量 239 单测 + Vite build 门禁）
+3. U2–U6 核心工程落地（✅ 代码与构建完成，Vite 构建 0 报错，FastAPI /app 托管闭环；E2E/视觉验收未做）
 
-**P1（U7 数据中台，U3/U4 之后插入）**
+**P1（U7 数据中台与 Streamlit 解耦 · 🟡 基本完成）**
 
-1. Trace 列表 + 详情（工具、token、成本、延迟）
-2. 评测 run 历史 + 版本对比
-3. 指标趋势 + 成本汇总
-4. 数据集详情 + 样本 + 校验状态
-5. 数据质量/血缘
-6. 把 Streamlit 剩余直连改成 API
+1. Trace 列表 + 详情（工具、token、成本、延迟）：✅ 已实现 `/v1/traces` 分页与 `/v1/traces/{id}` 全链路详情及 tool_calls 瀑布流
+2. 评测 run 历史 + 版本对比：✅ 已实现 `/v1/eval/runs` 历史列表与 `/v1/eval/compare` 版本 Diff 对比（精准捕获 Regression 退化样本）
+3. 指标趋势 + 成本汇总：🟡 `/ops` 已展示单次 run 的准确率/忠实度与单条 trace 的延迟/成本；按天趋势、按工具/模型切片与聚合成本汇总未做
+4. 数据集详情 + 样本 + 校验状态：🟡 `/v1/datasets` 与 Datasets 视图已展示不可变版本、样本数与哈希；样本明细、版本详情与校验结果 API 未做
+5. 把 Streamlit 剩余直连改成 API：🟡 会话、OCR、习题批改已收口至 `local_client`；代码助教仍直接 import `code_sandbox` / `code_attempt_store`
 
 **P2（U6 之后的生产化）**
 
@@ -1583,5 +1584,5 @@ Vite dev 端口 5173，代理 /v1 → http://127.0.0.1:8000；单机 local 模�
 
 - 当前底座**不阻塞 U2–U6**；原计划继续。
 - 数据中台不是没做，而是“后端有一半、前端没入口、指标/血缘/质量接口不足”。
-- U7 数据中台放在 U3/U4 之后，预计后端 2–3 天 + 前端 3–4 天。
+- U7 数据中台已落地 Trace 列表/详情、eval run 历史/对比、/ops 看板与数据集版本视图；样本明细、指标趋势、聚合成本与血缘仍是缺口。
 - 生产化 Phase 2 放 U6 之后，避免拖慢主流程。
